@@ -16,9 +16,10 @@ async function bootstrap() {
 
   app.use(requestContextMiddleware);
 
-  // CORS — allow all origins
+  // CORS — restrict to known frontend origins
+  const corsOrigins = configService.get<string[]>('corsOrigins', []);
   app.enableCors({
-    origin: true,
+    origin: corsOrigins.length > 0 ? corsOrigins : true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
     allowedHeaders: 'Content-Type,Authorization,Accept,X-Requested-With',
@@ -42,7 +43,8 @@ async function bootstrap() {
   app.setGlobalPrefix('api/v1');
 
   const isProduction =
-    configService.get<string>('NODE_ENV', process.env.NODE_ENV) === 'production';
+    configService.get<string>('NODE_ENV', process.env.NODE_ENV) ===
+    'production';
 
   if (!isProduction) {
     const documentation = new DocumentBuilder()
