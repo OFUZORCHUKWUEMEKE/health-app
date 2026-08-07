@@ -1,0 +1,368 @@
+// Telemedicine backend schema
+// DBML representation of a Mongo-friendly design
+
+Enum auth_provider {
+  LOCAL
+  GOOGLE
+}
+
+Enum appointment_type {
+  CHAT
+  AUDIO
+  VIDEO
+  MEET
+  HOME
+}
+
+Enum appointment_for {
+  SELF
+  OTHERS
+}
+
+Enum appointment_status {
+  PENDING
+  CONFIRMED
+  ACTIVE
+  COMPLETED
+  CANCELED
+  FAILED
+  FORFEITED
+  RESCHEDULED
+}
+
+Enum consultation_status {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  ADDENDED
+}
+
+Enum slot_status {
+  AVAILABLE
+  BOOKED
+  BLOCKED
+}
+
+Enum payment_status {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+Enum payment_method {
+  CARD
+  APPLE_PAY
+  BANK
+}
+
+Enum feedback_status {
+  NEW
+  REVIEWED
+}
+
+Enum investigation_status {
+  PENDING
+  UPLOADED
+  REVIEWED
+}
+
+Enum medication_status {
+  ACTIVE
+  STOPPED
+}
+
+Enum diagnosis_type {
+  PROVISIONAL
+  FINAL
+}
+
+Table users {
+  id varchar [pk, note: 'Mongo ObjectId']
+  registration_no varchar [unique, not null]
+  first_name varchar [not null]
+  last_name varchar [not null]
+  middle_name varchar
+  full_name varchar
+  email varchar [unique, not null]
+  phone_number varchar
+  password_hash varchar [not null]
+  provider auth_provider [not null, default: 'LOCAL']
+  verified boolean [not null, default: false]
+
+  date_of_birth date
+  gender varchar
+  marital_status varchar
+  occupation varchar
+  address text
+  profile_picture_url varchar
+
+  allergies json [note: 'Array of strings']
+  previous_medical_conditions json [note: 'Array of strings']
+  medical_flags json [note: 'Array of strings e.g. D, K']
+
+  terms_accepted boolean [default: false]
+  terms_accepted_at timestamp
+  refresh_token_hash varchar
+
+  created_at timestamp
+  updated_at timestamp
+
+  Note: 'Patient account + profile'
+}
+
+Table doctors {
+  id varchar [pk, note: 'Mongo ObjectId']
+  doctor_no varchar [unique, not null]
+  first_name varchar [not null]
+  last_name varchar [not null]
+  full_name varchar
+  email varchar [unique, not null]
+  phone_number varchar
+  password_hash varchar [not null]
+  active boolean [not null, default: true]
+  profile_picture_url varchar
+  specializations json [note: 'Array of strings']
+  license_no varchar [unique]
+  refresh_token_hash varchar
+
+  created_at timestamp
+  updated_at timestamp
+
+  Note: 'Doctor account + profile'
+}
+
+Table admins {
+  id varchar [pk, note: 'Mongo ObjectId']
+  first_name varchar
+  last_name varchar
+  email varchar [unique, not null]
+  password_hash varchar [not null]
+  role varchar [not null]
+  created_at timestamp
+  updated_at timestamp
+}
+
+Table appointments {
+  id varchar [pk, note: 'Mongo ObjectId']
+  appointment_ref varchar [unique, not null]
+
+  user_id varchar [not null]
+  doctor_id varchar
+  parent_appointment_id varchar
+
+  type appointment_type [not null]
+  appointment_for appointment_for [not null, default: 'SELF']
+  status appointment_status [not null, default: 'PENDING']
+
+  scheduled_date date [not null]
+  start_time varchar [not null]
+  end_time varchar [not null]
+  duration_minutes integer [not null]
+
+  address text
+  title varchar
+  present_complaint varchar
+  details text
+
+  amount decimal(12,2) [not null, default: 0]
+  discount_amount decimal(12,2) [not null, default: 0]
+  total_amount decimal(12,2) [not null, default: 0]
+  payment_status payment_status [not null, default: 'PENDING']
+
+  patient_snapshot json [note: 'Embedded patient data at booking time']
+  doctor_snapshot json [note: 'Embedded doctor data at assignment time']
+
+  cancellation_deadline_at timestamp
+  created_at timestamp
+  updated_at timestamp
+
+  Note: 'Booking/scheduling record only'
+}
+
+Table doctor_schedules {
+  id varchar [pk, note: 'Mongo ObjectId']
+  doctor_id varchar [not null]
+  date date [not null]
+  slots json [not null, note: 'Embedded slots array: start, end, status, appointment_id, type']
+  created_at timestamp
+  updated_at timestamp
+
+  Note: 'One document per doctor per day'
+}
+
+Table consultations {
+  id varchar [pk, note: 'Mongo ObjectId']
+  consultation_ref varchar [unique, not null]
+
+  appointment_id varchar [unique, not null]
+  user_id varchar [not null]
+  doctor_id varchar [not null]
+
+  status consultation_status [not null, default: 'OPEN']
+  started_at timestamp
+  ended_at timestamp
+
+  history_taking json [note: 'Embedded one-to-one clinical history section']
+  physical_exam json [note: 'Embedded one-to-one physical exam section']
+  diagnoses json [note: 'Embedded array: type, title, description, icd_10_code']
+  investigation_results_summary text
+  treatment_plan text
+  sections_completed json [note: 'Embedded booleans for UI completion state']
+  addendums json [note: 'Embedded append-only addendum entries']
+
+  created_at timestamp
+  updated_at timestamp
+
+  Note: 'Actual clinical encounter; one per appointment'
+}
+
+Table investigations {
+  id varchar [pk, note: 'Mongo ObjectId']
+  consultation_id varchar [not null]
+  appointment_id varchar [not null]
+  user_id varchar [not null]
+  doctor_id varchar [not null]
+
+  name varchar [not null]
+  category varchar
+  status investigation_status [not null, default: 'PENDING']
+
+  investigation_form_url varchar
+  result_file_url varchar
+
+  created_at timestamp
+  updated_at timestamp
+
+  Note: 'One record per requested investigation item'
+}
+
+Table medications {
+  id varchar [pk, note: 'Mongo ObjectId']
+  consultation_id varchar [not null]
+  appointment_id varchar [not null]
+  user_id varchar [not null]
+  doctor_id varchar [not null]
+
+  formulation varchar [not null]
+  drug_name varchar [not null]
+  dose_value decimal(10,2)
+  dose_unit varchar
+  interval varchar
+  duration_value integer
+  duration_unit varchar
+  order_instruction text
+  start_date date
+  status medication_status [not null, default: 'ACTIVE']
+
+  prescription_pdf_url varchar
+
+  created_at timestamp
+  updated_at timestamp
+
+  Note: 'One record per medication item'
+}
+
+Table hospitals {
+  id varchar [pk, note: 'Mongo ObjectId']
+  name varchar [not null]
+  address text
+  specialties json [note: 'Array of strings']
+  created_at timestamp
+  updated_at timestamp
+}
+
+Table referrals {
+  id varchar [pk, note: 'Mongo ObjectId']
+  consultation_id varchar [not null]
+  appointment_id varchar [not null]
+  user_id varchar [not null]
+  doctor_id varchar [not null]
+
+  specialist_name varchar [not null]
+  hospital_id varchar
+  hospital_name varchar
+  hospital_address text
+  referral_details text
+  referral_pdf_url varchar
+
+  created_at timestamp
+  updated_at timestamp
+}
+
+Table payments {
+  id varchar [pk, note: 'Mongo ObjectId']
+  payment_ref varchar [unique, not null]
+  appointment_id varchar [not null]
+  user_id varchar [not null]
+
+  amount decimal(12,2) [not null]
+  discount decimal(12,2) [not null, default: 0]
+  total_amount decimal(12,2) [not null]
+
+  payment_method payment_method [not null]
+  payment_status payment_status [not null, default: 'PENDING']
+  transaction_ref varchar [unique]
+  gateway_response json
+
+  created_at timestamp
+  updated_at timestamp
+
+  Note: 'Tied to appointment, not consultation'
+}
+
+Table feedbacks {
+  id varchar [pk, note: 'Mongo ObjectId']
+  consultation_id varchar [not null]
+  appointment_id varchar [not null]
+  user_id varchar [not null]
+  doctor_id varchar [not null]
+
+  rating integer [not null, note: '1-5']
+  note text
+  status feedback_status [not null, default: 'NEW']
+
+  created_at timestamp
+  updated_at timestamp
+}
+
+Table icd10_codes {
+  id varchar [pk, note: 'Mongo ObjectId']
+  code varchar [unique, not null]
+  description text [not null]
+  category varchar
+}
+
+Ref: appointments.user_id > users.id
+Ref: appointments.doctor_id > doctors.id
+Ref: appointments.parent_appointment_id > appointments.id
+
+Ref: doctor_schedules.doctor_id > doctors.id
+
+Ref: consultations.appointment_id > appointments.id
+Ref: consultations.user_id > users.id
+Ref: consultations.doctor_id > doctors.id
+
+Ref: investigations.consultation_id > consultations.id
+Ref: investigations.appointment_id > appointments.id
+Ref: investigations.user_id > users.id
+Ref: investigations.doctor_id > doctors.id
+
+Ref: medications.consultation_id > consultations.id
+Ref: medications.appointment_id > appointments.id
+Ref: medications.user_id > users.id
+Ref: medications.doctor_id > doctors.id
+
+Ref: referrals.consultation_id > consultations.id
+Ref: referrals.appointment_id > appointments.id
+Ref: referrals.user_id > users.id
+Ref: referrals.doctor_id > doctors.id
+Ref: referrals.hospital_id > hospitals.id
+
+Ref: payments.appointment_id > appointments.id
+Ref: payments.user_id > users.id
+
+Ref: feedbacks.consultation_id > consultations.id
+Ref: feedbacks.appointment_id > appointments.id
+Ref: feedbacks.user_id > users.id
+Ref: feedbacks.doctor_id > doctors.id
