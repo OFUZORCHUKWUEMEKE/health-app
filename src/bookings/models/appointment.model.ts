@@ -88,6 +88,12 @@ export class Appointment extends Document {
 
     @Prop({ type: String })
     daily_recording_id?: string;
+
+    @Prop({ type: Date })
+    video_started_at?: Date;
+
+    @Prop({ type: Date })
+    video_ended_at?: Date;
 }
 
 export const AppointmentSchema = SchemaFactory.createForClass(Appointment);
