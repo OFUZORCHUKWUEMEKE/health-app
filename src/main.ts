@@ -16,14 +16,31 @@ async function bootstrap() {
 
   app.use(requestContextMiddleware);
 
-  // CORS — restrict to known frontend origins
+  // CORS — open to every origin by default.
+  //
+  // Set CORS_ORIGINS to a comma-separated allowlist to restrict access again;
+  // leaving it empty (or setting it to `*`) allows any origin. Note that
+  // `origin: true` reflects the caller's Origin header rather than sending
+  // `*`, which is required because `credentials: true` forbids a wildcard.
   const corsOrigins = configService.get<string[]>('corsOrigins', []);
+  const allowAllOrigins = corsOrigins.length === 0 || corsOrigins.includes('*');
+
   app.enableCors({
-    origin: corsOrigins.length > 0 ? corsOrigins : true,
+    origin: allowAllOrigins ? true : corsOrigins,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
-    allowedHeaders: 'Content-Type,Authorization,Accept,X-Requested-With',
+    // Omitting `allowedHeaders` makes the cors middleware echo back whatever
+    // the browser asks for in Access-Control-Request-Headers, so clients are
+    // free to send custom headers such as x-request-id.
+    exposedHeaders: ['x-request-id'],
+    maxAge: 86400,
   });
+
+  logger.log(
+    allowAllOrigins
+      ? 'CORS: all origins allowed'
+      : `CORS: restricted to ${corsOrigins.join(', ')}`,
+  );
 
   // Global pipes & filters
   app.useGlobalPipes(
