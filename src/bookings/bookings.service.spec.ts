@@ -3,6 +3,31 @@ import { DateTime } from 'luxon';
 import { AppointmentFor, AppointmentStatus, Role } from 'src/common/enums';
 import { BookingsService } from './bookings.service';
 
+/**
+ * The service refuses to reschedule into a past timeslot, so specs that book or
+ * reschedule have to target a slot that is still in the future whenever the
+ * suite runs. Deriving the slot from the clock keeps these specs from rotting
+ * the way a hardcoded ISO string does.
+ *
+ * Returns 00:00 UTC on the first Monday at least `minDaysAhead` days out —
+ * Monday because the mocked weekly availability below uses `day_of_week: 1`
+ * (0 = Sunday .. 6 = Saturday).
+ */
+function futureUtcMonday(minDaysAhead = 7): DateTime {
+    let day = DateTime.utc().startOf('day').plus({ days: minDaysAhead });
+    while (day.weekday !== 1) {
+        day = day.plus({ days: 1 });
+    }
+    return day;
+}
+
+/** Wall-clock "YYYY-MM-DDTHH:mm:ss" for the given time of day on `day`. */
+function localIsoAt(day: DateTime, hour: number, minute = 0): string {
+    return (
+        day.set({ hour, minute }).toISO({ includeOffset: false, suppressMilliseconds: true }) ?? ''
+    );
+}
+
 describe('BookingsService', () => {
     const doctorAvailabilityRepository = {
         findOne: jest.fn(),
@@ -67,13 +92,15 @@ describe('BookingsService', () => {
         const patientId = new Types.ObjectId();
         const doctorId = new Types.ObjectId();
         const appointmentId = new Types.ObjectId();
+        // Original slot 09:00-09:30, rescheduled to 10:00 on the same upcoming Monday.
+        const slotDay = futureUtcMonday();
         const appointment = {
             _id: appointmentId,
             appointment_number: 'APT-20260620-1234',
             patient_id: patientId,
             doctor_id: doctorId,
-            scheduled_start_at_utc: new Date('2026-07-20T09:00:00.000Z'),
-            scheduled_end_at_utc: new Date('2026-07-20T09:30:00.000Z'),
+            scheduled_start_at_utc: slotDay.set({ hour: 9 }).toJSDate(),
+            scheduled_end_at_utc: slotDay.set({ hour: 9, minute: 30 }).toJSDate(),
             timezone_snapshot: 'UTC',
             status: AppointmentStatus.CONFIRMED,
             reason_for_visit: 'Follow up',
@@ -119,7 +146,7 @@ describe('BookingsService', () => {
             patientId.toString(),
             appointmentId.toString(),
             {
-                scheduled_start_local: '2026-07-20T10:00:00',
+                scheduled_start_local: localIsoAt(slotDay, 10),
                 timezone: 'UTC',
                 requested_duration_minutes: 30,
                 reason: 'Need a later time',
@@ -148,6 +175,7 @@ describe('BookingsService', () => {
 
     it('reconciles patient allergies when booking an appointment for self', async () => {
         const patientId = new Types.ObjectId();
+        const slotDay = futureUtcMonday();
 
         userRepository.findOne.mockResolvedValue({
             _id: patientId,
@@ -165,7 +193,7 @@ describe('BookingsService', () => {
             allergies: ['Penicillin', 'Peanuts'],
             Medical_conditions: ['Hypertension', 'Asthma'],
             timezone: 'Africa/Lagos',
-            scheduled_start_local: '2026-07-20T10:00:00',
+            scheduled_start_local: localIsoAt(slotDay, 10),
             requested_duration_minutes: 30,
             confirm_appointment: true,
         });
@@ -186,8 +214,9 @@ describe('BookingsService', () => {
     it('skips profile reconciliation when booking for someone else', async () => {
         const patientId = new Types.ObjectId();
         const doctorId = new Types.ObjectId();
-        const start = new Date('2026-07-20T10:00:00.000Z');
-        const end = new Date('2026-07-20T10:30:00.000Z');
+        const slotDay = futureUtcMonday();
+        const start = slotDay.set({ hour: 10 }).toJSDate();
+        const end = slotDay.set({ hour: 10, minute: 30 }).toJSDate();
 
         appointmentsRepository.findOne.mockResolvedValue(null);
         appointmentsRepository.create.mockResolvedValue({ _id: new Types.ObjectId() });
@@ -204,7 +233,7 @@ describe('BookingsService', () => {
                 present_complaint: 'Fever',
                 allergies: ['Peanuts'],
                 timezone: 'UTC',
-                scheduled_start_local: '2026-07-20T10:00:00',
+                scheduled_start_local: localIsoAt(slotDay, 10),
                 requested_duration_minutes: 30,
                 confirm_appointment: true,
                 appointment_for: AppointmentFor.OTHERS,
