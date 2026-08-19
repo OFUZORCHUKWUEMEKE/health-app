@@ -131,3 +131,13 @@ export enum AdminRole {
     SUPER_ADMIN = 'super_admin',
     MODERATOR = 'moderator',
 }
+
+// ─── MRN ───────────────────────────────────────────────
+/**
+ * Which collection an MRN registry row was reserved for. Deliberately narrower than
+ * `Role` — admins have no MRN, so admitting `Role.ADMIN` here would be meaningless.
+ */
+export enum MrnOwnerType {
+    DOCTOR = 'doctor',
+    PATIENT = 'patient',
+}

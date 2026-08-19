@@ -21,6 +21,10 @@ describe('AuthService', () => {
     const configService = {
         get: jest.fn(),
     };
+    const mrnService = {
+        generateUniqueMrn: jest.fn().mockResolvedValue('C-TEST01'),
+        claim: jest.fn().mockResolvedValue(undefined),
+    };
 
     let service: AuthService;
 
@@ -36,6 +40,7 @@ describe('AuthService', () => {
             pendingPasswordResetRepository as any,
             mailService as any,
             configService as any,
+            mrnService as any,
         );
 
         userRepository.findOne.mockResolvedValue(null);

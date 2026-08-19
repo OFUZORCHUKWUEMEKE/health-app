@@ -22,6 +22,9 @@ export type DoctorDocument = Doctor & Document;
         transform: (_doc, ret) => {
             delete ret.password_hash;
             delete ret.refresh_token_hash;
+            // MRN is stored for doctors but deliberately never exposed in doctor-shaped
+            // API responses — only patient responses surface an MRN.
+            delete ret.mrn;
             delete ret.__v;
             return ret;
         },
@@ -64,6 +67,14 @@ export class Doctor extends Document {
 
     @Prop({ type: String, unique: true, sparse: true })
     license_no?: string;
+
+    /**
+     * Medical Record Number, shared namespace with User.mrn (format: C-XXXXXX).
+     * Sparse rather than required so pre-backfill rows and seed updates stay valid.
+     * Hidden from API responses via the toJSON transform above.
+     */
+    @Prop({ type: String, unique: true, sparse: true })
+    mrn?: string;
 
     // ─── Auth ───────────────────────────────────────────
     @Prop()

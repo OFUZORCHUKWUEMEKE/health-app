@@ -41,3 +41,6 @@ lerna-debug.log*
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+
+# MRN backfill mapping files (old→new medical record numbers — never commit)
+scripts/backfill-mrn.*.json

@@ -341,7 +341,7 @@ export class DoctorsController extends CoreController {
                             email: 'john.doe@example.com',
                             phone_number: '+2348012345678',
                             registration_no: 'REG-00123',
-                            mrn: 'MRN-00123',
+                            mrn: 'C-3622ET',
                             gender: 'MALE',
                             date_of_birth: '1990-05-12T00:00:00.000Z',
                             marital_status: 'SINGLE',

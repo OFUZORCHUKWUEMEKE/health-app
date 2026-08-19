@@ -1,3 +1,5 @@
+import { randomInt } from 'crypto';
+
 export const GenerateRef = function (num: number, type: string): string {
     // let unique_code = GenerateRandomString(num)
     let unique_code = num.toString();
@@ -22,13 +24,27 @@ export const GenerateRandomString = function (length: number): string {
 };
 
 
-export function generateMRN(): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let result = '';
-    for (let i = 0; i < 9; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
+// ─── MRN ────────────────────────────────────────────────
+// Shared Medical Record Number namespace for both patients (users) and doctors.
+// Format: 'C-' + 6 uppercase alphanumeric characters, e.g. C-3622ET.
+//
+// NOTE: these constants are mirrored in scripts/lib/mrn.js for the plain-Node
+// seed/backfill scripts, which cannot import TypeScript. Keep the two in sync.
+export const MRN_PREFIX = 'C-';
+export const MRN_BODY_LENGTH = 6;
+export const MRN_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+export const MRN_REGEX = /^C-[A-Z0-9]{6}$/;
+
+/**
+ * Produces a candidate MRN. Does NOT reserve it — use MrnService.generateUniqueMrn() for
+ * anything that persists, so the value is claimed in the shared registry first.
+ */
+export function generateMrnCandidate(): string {
+    let body = '';
+    for (let i = 0; i < MRN_BODY_LENGTH; i++) {
+        body += MRN_ALPHABET.charAt(randomInt(MRN_ALPHABET.length));
     }
-    return result;
+    return MRN_PREFIX + body;
 }
 
 export function generateSessionCode(): string {

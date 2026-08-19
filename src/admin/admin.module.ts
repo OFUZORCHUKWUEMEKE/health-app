@@ -18,6 +18,7 @@ import {
   MedicationSchema,
 } from 'src/consultations/consultations.model';
 import { Appointment, AppointmentSchema } from 'src/bookings/models/appointment.model';
+import { MrnModule } from 'src/common/mrn/mrn.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { Appointment, AppointmentSchema } from 'src/bookings/models/appointment.
       { name: Appointment.name, schema: AppointmentSchema },
     ]),
     UsersModule,
+    MrnModule,
   ],
   providers: [AdminService, AdminRepository, DoctorRepository, RolesGuard],
   controllers: [AdminController],

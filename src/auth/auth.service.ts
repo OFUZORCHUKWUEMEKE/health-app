@@ -28,8 +28,9 @@ import {
     VerifyForgotPasswordOtpDto,
     VerifyPatientRegistrationOtpDto,
 } from './auth.dto';
-import { AdminRole, AuthProvider, Role } from 'src/common/enums';
-import { GenerateRandomString, generateMRN } from 'src/utils/code-generator.util';
+import { AdminRole, AuthProvider, MrnOwnerType, Role } from 'src/common/enums';
+import { GenerateRandomString } from 'src/utils/code-generator.util';
+import { MrnService } from 'src/common/mrn/mrn.service';
 import { ConfigService } from '@nestjs/config';
 import { PendingRegistrationRepository } from './pending-registration.repository';
 import { PendingPasswordResetRepository } from './pending-password-reset.repository';
@@ -55,6 +56,7 @@ export class AuthService {
         private readonly pendingPasswordResetRepository: PendingPasswordResetRepository,
         private readonly mailService: MailService,
         private readonly configService: ConfigService,
+        private readonly mrnService: MrnService,
     ) { }
 
     // ─── Patient Registration (Email OTP) ─────────────────
@@ -261,10 +263,12 @@ export class AuthService {
 
         const registrationNo = `PAT-${Date.now().toString(36).toUpperCase()}-${GenerateRandomString(4).toUpperCase()}`;
         const passwordHash = await this.hashPassword(dto.password);
+        const mrn = await this.mrnService.generateUniqueMrn(MrnOwnerType.PATIENT);
 
         const newUser = await this.userRepository.create(
-            this.buildPatientCreatePayload(dto, email, passwordHash, registrationNo, true),
+            this.buildPatientCreatePayload(dto, email, passwordHash, registrationNo, mrn, true),
         );
+        await this.mrnService.claim(mrn, String(newUser._id));
 
         const { accessToken, refreshToken } = await this.tokenService.generateTokens(
             newUser,
@@ -311,14 +315,18 @@ export class AuthService {
         const passwordHash = await this.hashPassword(password);
         const registrationNo = `PAT-${Date.now().toString(36).toUpperCase()}-${GenerateRandomString(4).toUpperCase()}`;
 
+        const mrn = await this.mrnService.generateUniqueMrn(MrnOwnerType.PATIENT);
+
         const newUser = await this.userRepository.create(
             this.buildPatientCreatePayload(
                 createUser,
                 email.toLowerCase(),
                 passwordHash,
                 registrationNo,
+                mrn,
             ),
         );
+        await this.mrnService.claim(mrn, String(newUser._id));
 
         const { accessToken, refreshToken } = await this.tokenService.generateTokens(newUser, Role.PATIENT);
 
@@ -401,14 +409,19 @@ export class AuthService {
 
         const passwordHash = await this.hashPassword(password);
         const doctorNo = `DOC-${Date.now().toString(36).toUpperCase()}-${GenerateRandomString(4).toUpperCase()}`;
+        const mrn = await this.mrnService.generateUniqueMrn(MrnOwnerType.DOCTOR);
 
+        // createDoctor is a validated DTO instance and has no `mrn` property, so this
+        // spread cannot override the server-generated value below.
         const newDoctor = await this.doctorRepository.create({
             ...createDoctor,
             email: email.toLowerCase(),
             password_hash: passwordHash,
             doctor_no: doctorNo,
+            mrn,
             full_name: `${createDoctor.first_name} ${createDoctor.last_name}`,
         });
+        await this.mrnService.claim(mrn, String(newDoctor._id));
 
         const { accessToken, refreshToken } = await this.tokenService.generateTokens(newDoctor, Role.DOCTOR);
 
@@ -627,17 +640,19 @@ export class AuthService {
 
         if (!user) {
             const registrationNo = `PAT-${Date.now().toString(36).toUpperCase()}-${GenerateRandomString(4).toUpperCase()}`;
+            const mrn = await this.mrnService.generateUniqueMrn(MrnOwnerType.PATIENT);
             user = await this.userRepository.create({
                 email: googleEmail,
                 first_name: req.user.first_name,
                 last_name: req.user.last_name,
                 full_name: `${req.user.first_name} ${req.user.last_name}`,
                 registration_no: registrationNo,
-                mrn: generateMRN(),
+                mrn,
                 provider: AuthProvider.GOOGLE,
                 verified: true,
                 profile_picture_url: req.user.profile_picture_url,
             });
+            await this.mrnService.claim(mrn, String(user._id));
             created = true;
         } else {
             const updates: Record<string, any> = {
@@ -1055,6 +1070,7 @@ export class AuthService {
         email: string,
         passwordHash: string,
         registrationNo: string,
+        mrn: string,
         verified = false,
     ) {
         return {
@@ -1065,7 +1081,7 @@ export class AuthService {
             phone_number: dto.phone_number,
             password_hash: passwordHash,
             registration_no: registrationNo,
-            mrn: generateMRN(),
+            mrn,
             full_name: `${dto.first_name} ${dto.last_name}`,
             provider: AuthProvider.LOCAL,
             verified,

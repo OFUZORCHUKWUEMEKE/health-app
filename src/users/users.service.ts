@@ -41,6 +41,7 @@ export class UsersService extends CoreService<UserRepository> {
         return {
             _id: user._id,
             registration_no: user.registration_no,
+            mrn: user.mrn ?? null,
             first_name: user.first_name,
             last_name: user.last_name,
             full_name: user.full_name,

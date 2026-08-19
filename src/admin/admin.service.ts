@@ -11,6 +11,8 @@ import {
 	MedicationDocument,
 } from 'src/consultations/consultations.model';
 import { AppointmentDocument } from 'src/bookings/models/appointment.model';
+import { MrnService } from 'src/common/mrn/mrn.service';
+import { MrnOwnerType } from 'src/common/enums';
 
 @Injectable()
 export class AdminService {
@@ -24,6 +26,7 @@ export class AdminService {
 		private readonly investigationModel: Model<InvestigationDocument>,
 		@InjectModel('Appointment')
 		private readonly appointmentModel: Model<AppointmentDocument>,
+		private readonly mrnService: MrnService,
 	) { }
 
 	async createDoctor(dto: CreateDoctorDto) {
@@ -36,14 +39,19 @@ export class AdminService {
 
 		const passwordHash = await bcrypt.hash(dto.password, 10);
 		const doctorNo = `DOC-${Date.now().toString(36).toUpperCase()}-${GenerateRandomString(4).toUpperCase()}`;
+		const mrn = await this.mrnService.generateUniqueMrn(MrnOwnerType.DOCTOR);
 
+		// dto is a validated DTO instance with no `mrn` property, so this spread cannot
+		// override the server-generated value below.
 		const doctor = await this.doctorRepository.create({
 			...dto,
 			email,
 			password_hash: passwordHash,
 			doctor_no: doctorNo,
+			mrn,
 			full_name: `${dto.first_name} ${dto.last_name}`,
 		});
+		await this.mrnService.claim(mrn, String(doctor._id));
 
 		return doctor.toJSON();
 	}

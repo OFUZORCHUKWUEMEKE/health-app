@@ -2,6 +2,13 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
+const {
+    allocateUniqueMrn,
+    ensureRegistryIndex,
+    readHeldMrns,
+    registry,
+    syncRegistry,
+} = require('./lib/mrn');
 
 const DB_URL = process.env.DATABASE_URL;
 
@@ -18,6 +25,9 @@ const DoctorSchema = new mongoose.Schema(
         profile_picture_url: { type: String },
         specializations: { type: [String], default: [] },
         license_no: { type: String, unique: true, sparse: true },
+        // Optional on purpose — doctors seeded before the MRN backfill have none,
+        // and the update branch below saves those documents through validators.
+        mrn: { type: String, unique: true, sparse: true },
         refresh_token_hash: { type: String },
     },
     { timestamps: true, collection: 'doctors' },
@@ -127,6 +137,21 @@ async function run() {
     await mongoose.connect(DB_URL);
     console.log('Connected.\n');
 
+    // MRN is a namespace shared with patients, so seed the taken-set before handing any
+    // out. The registry is included and is the important one: it holds values that are
+    // reserved but not yet on a document, which the two collections cannot show us.
+    const db = mongoose.connection.db;
+    const [doctorMrns, userMrns, registeredMrns] = await Promise.all([
+        db.collection('doctors').distinct('mrn'),
+        db.collection('users').distinct('mrn'),
+        registry(db).distinct('mrn'),
+    ]);
+    const takenMrns = new Set(
+        [...doctorMrns, ...userMrns, ...registeredMrns].filter(
+            (m) => typeof m === 'string' && m.length > 0,
+        ),
+    );
+
     let created = 0;
     let updated = 0;
 
@@ -145,6 +170,10 @@ async function run() {
             existing.license_no = doc.license_no;
             existing.password_hash = password_hash;
             existing.active = true;
+            // Only fill a gap — never reissue an MRN a doctor already has.
+            if (!existing.mrn) {
+                existing.mrn = allocateUniqueMrn(takenMrns);
+            }
             await existing.save();
             console.log(`  ✔ Updated : ${existing.email}`);
             updated++;
@@ -155,11 +184,22 @@ async function run() {
                 full_name,
                 password_hash,
                 doctor_no: generateDoctorNo(),
+                mrn: allocateUniqueMrn(takenMrns),
                 active: true,
             });
             console.log(`  ✔ Created : ${created_doc.email}`);
             created++;
         }
+    }
+
+    // Any MRN this script just wrote is invisible to the running app until it is in the
+    // registry — and an unregistered value is one the app will happily reissue.
+    await ensureRegistryIndex(db);
+    const sync = await syncRegistry(db, await readHeldMrns(db), { apply: true });
+    console.log(`\n  registry: ${sync.inserted} registered, ${sync.attached} owner(s) attached`);
+    if (sync.conflicts.length) {
+        console.error(`  ⚠ ${sync.conflicts.length} registry conflict(s) — resolve by hand:`);
+        for (const c of sync.conflicts) console.error(`    ${JSON.stringify(c)}`);
     }
 
     await mongoose.disconnect();

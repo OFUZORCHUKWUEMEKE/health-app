@@ -23,6 +23,7 @@ import {
   PendingPasswordResetSchema,
 } from './pending-password-reset.model';
 import { PendingPasswordResetRepository } from './pending-password-reset.repository';
+import { MrnModule } from 'src/common/mrn/mrn.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { PendingPasswordResetRepository } from './pending-password-reset.reposit
     UsersModule,
     AdminModule,
     DoctorsModule,
+    MrnModule,
   ],
   providers: [
     AuthService,
