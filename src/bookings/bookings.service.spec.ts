@@ -56,6 +56,11 @@ describe('BookingsService', () => {
         findOne: jest.fn(),
         findOneAndUpdate: jest.fn(),
     };
+    // Notifications hang off domain events. Asserting on this mock is how the specs check
+    // that an event fires exactly once on success and not at all on a failure path.
+    const eventEmitter = {
+        emit: jest.fn(),
+    };
 
     let service: BookingsService;
 
@@ -70,6 +75,7 @@ describe('BookingsService', () => {
             consultationModel as any,
             configService as any,
             userRepository as any,
+            eventEmitter as any,
         );
 
         doctorBlackoutRepository.findOne.mockResolvedValue(null);
@@ -510,6 +516,7 @@ describe('BookingsService', () => {
                 consultationModel as any,
                 configService as any,
                 userRepository as any,
+                eventEmitter as any,
             );
 
             // Default: no blackouts

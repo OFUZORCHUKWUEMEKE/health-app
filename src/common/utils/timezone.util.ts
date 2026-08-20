@@ -95,3 +95,20 @@ export function utcToLocalIso(date: Date, zone: string): string {
         }) ?? ''
     );
 }
+
+/**
+ * Human-readable local time for user-facing copy, e.g. "Mon 12 May at 10:30 AM".
+ *
+ * Unlike the other helpers here this one is lenient: it takes an optional zone and falls
+ * back to UTC rather than throwing on a bad one. It is used while rendering notification
+ * text, where a malformed stored timezone should degrade the wording rather than abort the
+ * notification — and by extension the domain operation that triggered it.
+ */
+export function formatZoned(
+    date: Date,
+    zone?: string | null,
+    format = "EEE d LLL 'at' h:mm a",
+): string {
+    const safeZone = zone && isValidIanaTimezone(zone) ? zone : 'UTC';
+    return DateTime.fromJSDate(date, { zone: safeZone }).toFormat(format);
+}

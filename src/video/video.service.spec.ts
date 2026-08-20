@@ -18,6 +18,9 @@ describe('VideoService', () => {
   const configService = { get: jest.fn() };
   const appointmentModel = { findById: jest.fn(), updateOne: jest.fn() };
   const consultationModel = { findOneAndUpdate: jest.fn(), findOne: jest.fn() };
+  // video.room_opened must fire only when the room is actually created, never on the
+  // repeated polls the doctor's client makes while a consultation is open.
+  const eventEmitter = { emit: jest.fn() };
 
   let service: VideoService;
   let doctorId: Types.ObjectId;
@@ -52,6 +55,7 @@ describe('VideoService', () => {
       configService as any,
       appointmentModel as any,
       consultationModel as any,
+      eventEmitter as any,
     );
 
     appointmentModel.updateOne.mockResolvedValue({});
@@ -310,6 +314,58 @@ describe('VideoService', () => {
       expect(
         mockApi.post.mock.calls.filter((c) => c[0] === '/rooms'),
       ).toHaveLength(0);
+    });
+  });
+
+  describe('video.room_opened event', () => {
+    const roomOpenedCalls = () =>
+      eventEmitter.emit.mock.calls.filter((c) => c[0] === 'video.room_opened');
+
+    it('emits when the room is created, so the patient learns they can join', async () => {
+      // This is what replaces the patient sitting on a retry loop against
+      // "Doctor hasn't opened the session yet. Please wait."
+      appointmentModel.findById.mockResolvedValue(buildAppointment());
+
+      await service.getDoctorVideoToken(appointmentId.toString(), {
+        _id: doctorId,
+      });
+
+      expect(roomOpenedCalls()).toHaveLength(1);
+      expect(roomOpenedCalls()[0][1]).toMatchObject({
+        appointment_id: appointmentId.toString(),
+        patient_id: patientId.toString(),
+        doctor_id: doctorId.toString(),
+      });
+    });
+
+    it('does NOT emit when the room already exists', async () => {
+      // The doctor's client polls this endpoint while the consultation is open. Gating on
+      // the endpoint rather than on room creation would notify the patient every poll.
+      appointmentModel.findById.mockResolvedValue(
+        buildAppointment({
+          daily_room_name: 'consultation-existing',
+          daily_room_url: 'https://carelexa.daily.co/consultation-existing',
+          daily_room_expires_at: new Date(Date.now() + 30 * 60_000),
+        }),
+      );
+
+      await service.getDoctorVideoToken(appointmentId.toString(), {
+        _id: doctorId,
+      });
+
+      expect(roomOpenedCalls()).toHaveLength(0);
+    });
+
+    it('does not emit when the appointment is rejected before room creation', async () => {
+      appointmentModel.findById.mockResolvedValue(
+        buildAppointment({ status: AppointmentStatus.PENDING }),
+      );
+
+      await expect(
+        service.getDoctorVideoToken(appointmentId.toString(), { _id: doctorId }),
+      ).rejects.toThrow();
+
+      expect(roomOpenedCalls()).toHaveLength(0);
     });
   });
 

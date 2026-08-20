@@ -11,7 +11,9 @@ import { Model, Types, isValidObjectId } from 'mongoose';
 import axios, { AxiosInstance } from 'axios';
 import { AppointmentDocument } from 'src/bookings/models/appointment.model';
 import { ConsultationDocument } from 'src/consultations/consultations.model';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AppointmentStatus } from 'src/common/enums';
+import { AppEvents, VideoRoomOpenedEvent } from 'src/common/events';
 import {
   ConsultationStatusEnum,
   ConsultationTypeEnum,
@@ -54,6 +56,7 @@ export class VideoService {
     private readonly appointmentModel: Model<AppointmentDocument>,
     @InjectModel('Consultation')
     private readonly consultationModel: Model<ConsultationDocument>,
+    private readonly eventEmitter: EventEmitter2,
   ) {
     this.api = axios.create({
       baseURL: 'https://api.daily.co/v1',
@@ -112,8 +115,27 @@ export class VideoService {
       appointment.consultation_id = consultation._id as any;
     }
 
+    // Capture BEFORE the branch. The doctor's client calls this endpoint repeatedly while
+    // the consultation is open, so gating on the endpoint would notify the patient on
+    // every poll. Room creation happens once, and that is the moment the patient can
+    // actually join -- it replaces sitting on the "Doctor hasn't opened the session yet"
+    // retry loop that getPatientVideoToken throws.
+    const roomExisted = !!appointment.daily_room_name;
+
     if (!appointment.daily_room_name) {
       await this.createRoomForAppointment(appointment);
+    }
+
+    if (!roomExisted && appointment.patient_id) {
+      this.eventEmitter.emit(AppEvents.VIDEO_ROOM_OPENED, {
+        appointment_id: appointment._id.toString(),
+        consultation_id: consultation?._id ? consultation._id.toString() : null,
+        patient_id: appointment.patient_id.toString(),
+        doctor_id: doctor._id.toString(),
+        scheduled_start_at_utc:
+          appointment.scheduled_start_at_utc?.toISOString() ?? null,
+        timezone_snapshot: appointment.timezone_snapshot ?? null,
+      } as VideoRoomOpenedEvent);
     }
 
     const expiresAt =

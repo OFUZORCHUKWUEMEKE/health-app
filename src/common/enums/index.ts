@@ -141,3 +141,58 @@ export enum MrnOwnerType {
     DOCTOR = 'doctor',
     PATIENT = 'patient',
 }
+
+// ─── Notifications ─────────────────────────────────────
+/**
+ * Who a notification is addressed to. Values match `Role.PATIENT` / `Role.DOCTOR`
+ * exactly, so `RolesGuard`'s `request.userRole` maps across with a cast rather than a
+ * translation table. Deliberately narrower than `Role` — admins have no feed yet.
+ */
+export enum NotificationRecipientType {
+    PATIENT = 'patient',
+    DOCTOR = 'doctor',
+}
+
+/**
+ * Broad grouping for filtering a feed. Coarser than `NotificationType` on purpose:
+ * clients offer tabs over categories, not over the full type list.
+ */
+export enum NotificationCategory {
+    APPOINTMENT = 'APPOINTMENT',
+    CONSULTATION = 'CONSULTATION',
+    CLINICAL = 'CLINICAL',
+    VIDEO = 'VIDEO',
+    REMINDER = 'REMINDER',
+}
+
+/**
+ * The specific thing that happened. This is the contract the frontend maps to an icon
+ * and a deep link, so values are stable and never reused for a different meaning —
+ * historical rows keep whatever type they were written with.
+ */
+export enum NotificationType {
+    // Appointments
+    APPOINTMENT_BOOKED = 'APPOINTMENT_BOOKED',
+    APPOINTMENT_REQUEST_RECEIVED = 'APPOINTMENT_REQUEST_RECEIVED',
+    APPOINTMENT_CONFIRMED = 'APPOINTMENT_CONFIRMED',
+    APPOINTMENT_CANCELLED = 'APPOINTMENT_CANCELLED',
+    APPOINTMENT_RESCHEDULED = 'APPOINTMENT_RESCHEDULED',
+    APPOINTMENT_REASSIGNED = 'APPOINTMENT_REASSIGNED',
+    APPOINTMENT_REMOVED = 'APPOINTMENT_REMOVED',
+
+    // Reminders
+    APPOINTMENT_REMINDER_24H = 'APPOINTMENT_REMINDER_24H',
+    APPOINTMENT_REMINDER_1H = 'APPOINTMENT_REMINDER_1H',
+
+    // Consultations
+    CONSULTATION_SUMMARY_AVAILABLE = 'CONSULTATION_SUMMARY_AVAILABLE',
+
+    // Clinical
+    INVESTIGATIONS_REQUESTED = 'INVESTIGATIONS_REQUESTED',
+    PRESCRIPTION_READY = 'PRESCRIPTION_READY',
+    REFERRAL_AVAILABLE = 'REFERRAL_AVAILABLE',
+    INVESTIGATION_RESULTS_UPLOADED = 'INVESTIGATION_RESULTS_UPLOADED',
+
+    // Video
+    VIDEO_ROOM_OPENED = 'VIDEO_ROOM_OPENED',
+}

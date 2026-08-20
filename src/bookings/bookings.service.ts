@@ -11,7 +11,15 @@ import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Types } from 'mongoose';
 import { Model } from 'mongoose';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AppointmentFor, AppointmentStatus, Role } from 'src/common/enums';
+import {
+    AppEvents,
+    AppointmentCancelledEvent,
+    AppointmentConfirmedEvent,
+    AppointmentCreatedEvent,
+    AppointmentRescheduledEvent,
+} from 'src/common/events';
 import {
     Consultation,
     ConsultationDocument,
@@ -70,6 +78,7 @@ export class BookingsService implements OnModuleInit {
         private readonly consultationModel: Model<ConsultationDocument>,
         private readonly configService: ConfigService,
         private readonly userRepository: UserRepository,
+        private readonly eventEmitter: EventEmitter2,
     ) { }
 
     async onModuleInit() {
@@ -974,6 +983,24 @@ export class BookingsService implements OnModuleInit {
                 },
             });
 
+            // Emitted here rather than in the four public entry points because
+            // createPatientAppointment, createPatientAppointmentWithFallback,
+            // createManualAppointment and createAutoMatchAppointment all funnel through
+            // this method. Inside the try and after create() resolves, so an E11000 that
+            // becomes a ConflictException below never announces a booking that does not
+            // exist. `status` lets the listener distinguish PENDING (doctor must accept)
+            // from CONFIRMED (auto-matched, both sides are booked).
+            this.eventEmitter.emit(AppEvents.APPOINTMENT_CREATED, {
+                appointment_id: String(appointment._id),
+                appointment_number: appointment.appointment_number,
+                patient_id: String(patientId),
+                doctor_id: doctorObjectId ? String(doctorObjectId) : null,
+                scheduled_start_at_utc: start.toISOString(),
+                scheduled_end_at_utc: end.toISOString(),
+                timezone_snapshot: timezone,
+                status,
+            } satisfies AppointmentCreatedEvent);
+
             return appointment;
         } catch (error: any) {
             if (error?.code === 11000) {
@@ -1471,17 +1498,32 @@ export class BookingsService implements OnModuleInit {
             throw new BadRequestException('Only pending or confirmed appointments can be cancelled');
         }
 
-        return this.appointmentsRepository.findOneAndUpdate(
+        const cancelledReason = dto.reason || 'Cancelled by patient';
+
+        const updated = await this.appointmentsRepository.findOneAndUpdate(
             { _id: appointment._id },
             {
                 $set: {
                     status: AppointmentStatus.CANCELED,
                     cancelled_by: Role.PATIENT,
-                    cancelled_reason: dto.reason || 'Cancelled by patient',
+                    cancelled_reason: cancelledReason,
                 },
             },
             {},
         );
+
+        // cancelled_by drives the fan-out: a patient cancelling notifies the doctor.
+        this.eventEmitter.emit(AppEvents.APPOINTMENT_CANCELLED, {
+            appointment_id: String(appointment._id),
+            patient_id: String(patientId),
+            doctor_id: appointment.doctor_id ? String(appointment.doctor_id) : null,
+            scheduled_start_at_utc: appointment.scheduled_start_at_utc?.toISOString(),
+            timezone_snapshot: appointment.timezone_snapshot,
+            cancelled_by: Role.PATIENT,
+            cancelled_reason: cancelledReason,
+        } as AppointmentCancelledEvent);
+
+        return updated;
     }
 
     async reschedulePatientAppointment(
@@ -2541,6 +2583,30 @@ export class BookingsService implements OnModuleInit {
             {},
         );
 
+        // After the write resolves, on the success path only. Note canTransitionStatus
+        // reads and this writes without a status precondition, so two concurrent confirms
+        // can both emit -- the event_key unique index absorbs the duplicate notification.
+        const common = {
+            appointment_id: String(appointment._id),
+            patient_id: String(appointment.patient_id),
+            doctor_id: String(doctorId),
+            scheduled_start_at_utc: appointment.scheduled_start_at_utc?.toISOString(),
+            timezone_snapshot: appointment.timezone_snapshot,
+        };
+
+        if (targetStatus === AppointmentStatus.CONFIRMED) {
+            this.eventEmitter.emit(AppEvents.APPOINTMENT_CONFIRMED, {
+                ...common,
+                actor_role: Role.DOCTOR,
+            } as AppointmentConfirmedEvent);
+        } else if (targetStatus === AppointmentStatus.CANCELED) {
+            this.eventEmitter.emit(AppEvents.APPOINTMENT_CANCELLED, {
+                ...common,
+                cancelled_by: Role.DOCTOR,
+                cancelled_reason: patch.cancelled_reason,
+            } as AppointmentCancelledEvent);
+        }
+
         return updated;
     }
 
@@ -2692,6 +2758,24 @@ export class BookingsService implements OnModuleInit {
                     },
                     {},
                 );
+
+                // Emitted in the success return, NOT at the top of the loop body: this is a
+                // 3-attempt E11000 retry, so an emit anywhere earlier would fire once per
+                // attempt. Both patient- and doctor-initiated reschedules funnel through
+                // here, and actorRole already distinguishes them.
+                this.eventEmitter.emit(AppEvents.APPOINTMENT_RESCHEDULED, {
+                    old_appointment_id: String(appointmentObjectId),
+                    new_appointment_id: String(newAppointment._id),
+                    patient_id: String(patientObjectId),
+                    previous_doctor_id: String(originalDoctorObjectId),
+                    new_doctor_id: selectedDoctorId ? String(selectedDoctorId) : null,
+                    old_start_at_utc: appointment.scheduled_start_at_utc?.toISOString(),
+                    new_start_at_utc: start.toISOString(),
+                    timezone_snapshot: selectedTimezone,
+                    actor_role: actorRole,
+                    reason,
+                    fallback_used: fallbackUsed,
+                } as AppointmentRescheduledEvent);
 
                 return {
                     old_appointment_id: appointmentObjectId,

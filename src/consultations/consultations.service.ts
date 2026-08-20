@@ -36,7 +36,16 @@ import {
 import { ComplaintHistoryRepository } from './compliant-history.repository';
 import { PhysicalExamsRepository } from './physical-exams.repository';
 import { InjectModel } from '@nestjs/mongoose';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Model } from 'mongoose';
+import {
+  AppEvents,
+  ConsultationCompletedEvent,
+  ConsultationInvestigationResultsUploadedEvent,
+  ConsultationInvestigationsRequestedEvent,
+  ConsultationMedicationsAssignedEvent,
+  ConsultationReferralAssignedEvent,
+} from 'src/common/events';
 import { AppointmentDocument } from 'src/bookings/models/appointment.model';
 import { AppointmentStatus } from 'src/common/enums';
 import { CreateMedicationDto } from './dto/create-medication';
@@ -86,6 +95,7 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
     @InjectModel('Appointment')
     private readonly appointmentModel: Model<AppointmentDocument>,
     private readonly cloudinaryService: CloudinaryService,
+    private readonly eventEmitter: EventEmitter2,
     // @InjectModel('diagnosis') private readonly diagnosisModel: Diagnosis,
   ) {
     super(consultationRepository);
@@ -244,6 +254,19 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
           },
         },
       );
+    }
+
+    // Guarded above by the already-COMPLETED conflict check, so a repeated call throws
+    // before reaching here and cannot re-announce the summary.
+    if (consultation.user_id) {
+      this.eventEmitter.emit(AppEvents.CONSULTATION_COMPLETED, {
+        consultation_id: String(consultation._id),
+        appointment_id: consultation.appointment_id
+          ? String(consultation.appointment_id)
+          : null,
+        patient_id: String(consultation.user_id),
+        doctor_id: String(doctor_id),
+      } as ConsultationCompletedEvent);
     }
 
     return updatedConsultation;
@@ -819,6 +842,25 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
       {},
     );
 
+    // Gated on assign_to_patient, the flag the doctor already controls for patient
+    // visibility. One event for the whole batch rather than one per drug: prescribing
+    // four medications is one clinical action, and four notifications for it is spam.
+    // Only ids and a count travel -- never drug names. See the PHI rule in
+    // notification-templates.ts.
+    const patientVisible = created.filter(
+      (medication: any) => medication?.user_id,
+    );
+
+    if (patientVisible.length && consultation.user_id) {
+      this.eventEmitter.emit(AppEvents.CONSULTATION_MEDICATIONS_ASSIGNED, {
+        consultation_id: String(consultationObjectId),
+        patient_id: String(consultation.user_id),
+        doctor_id: String(doctor_id),
+        medication_ids: patientVisible.map((m: any) => String(m._id)),
+        count: patientVisible.length,
+      } as ConsultationMedicationsAssignedEvent);
+    }
+
     return created;
   }
 
@@ -1245,6 +1287,18 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
       { $addToSet: { referral_id: (created as any)._id } },
       {},
     );
+
+    // Only when the doctor marked it patient-visible. The specialist, hospital and
+    // referral_details never leave this method -- the notification says a letter is
+    // available and the patient opens the app to read it.
+    if (assignToPatient) {
+      this.eventEmitter.emit(AppEvents.CONSULTATION_REFERRAL_ASSIGNED, {
+        consultation_id: String(consultationObjectId),
+        patient_id: String(consultation.user_id),
+        doctor_id: String(doctor_id),
+        referral_id: String((created as any)._id),
+      } as ConsultationReferralAssignedEvent);
+    }
 
     return created;
   }
@@ -2161,6 +2215,18 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
       ),
     );
 
+    // One event for the batch, carrying only ids and a count -- test names are clinical
+    // detail and stay out of notification text.
+    if (assignToPatient && consultation.user_id) {
+      this.eventEmitter.emit(AppEvents.CONSULTATION_INVESTIGATIONS_REQUESTED, {
+        consultation_id: String(consultation_id),
+        patient_id: String(consultation.user_id),
+        doctor_id: String(doctor_id),
+        investigation_list_ids: data.map((item: any) => String(item._id)),
+        count: data.length,
+      } as ConsultationInvestigationsRequestedEvent);
+    }
+
     return data;
   }
 
@@ -2884,6 +2950,25 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
         select:
           'title type consoltation_for status session_number createdAt updatedAt',
       });
+
+    // The one patient -> doctor direction in the whole catalogue. Read doctor_id and
+    // consultation_id off the PRE-populate document: `updated` has had both replaced with
+    // full sub-documents by the populate() chain above, so String(updated.doctor_id) would
+    // stringify an object rather than an id.
+    if (investigation.doctor_id) {
+      this.eventEmitter.emit(
+        AppEvents.CONSULTATION_INVESTIGATION_RESULTS_UPLOADED,
+        {
+          consultation_id: investigation.consultation_id
+            ? String(investigation.consultation_id)
+            : null,
+          investigation_list_id: String(invId),
+          patient_id: String(uid),
+          doctor_id: String(investigation.doctor_id),
+          image_count: imageUrls.length,
+        } as ConsultationInvestigationResultsUploadedEvent,
+      );
+    }
 
     return updated;
   }

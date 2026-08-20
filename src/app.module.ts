@@ -15,6 +15,8 @@ import * as leanVirtuals from 'mongoose-lean-virtuals';
 import { BookingsModule } from './bookings/bookings.module';
 import { VideoModule } from './video/video.module';
 import { logIndexBuildFailures } from './database/index-error-logger';
+import { ScheduleModule } from '@nestjs/schedule';
+import { NotificationsModule } from './notifications/notifications.module';
 
 
 @Module({
@@ -23,6 +25,10 @@ import { logIndexBuildFailures } from './database/index-error-logger';
     DoctorsModule,
     UsersModule,
     EventEmitterModule.forRoot(),
+    // Drives the appointment reminder sweep. In-process is safe on Render's single
+    // instance; correctness under multiple instances comes from the atomic claim in
+    // AppointmentReminderService, not from there being one scheduler.
+    ScheduleModule.forRoot(),
     ConsultationsModule,
     ConfigModule.forRoot({
       isGlobal: true,
@@ -49,6 +55,7 @@ import { logIndexBuildFailures } from './database/index-error-logger';
     MailModule,
     BookingsModule,
     VideoModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -50,3 +50,8 @@ services:
         value: false
       - key: ADMIN_BOOTSTRAP_KEY
         sync: false
+      # Shared secret for POST /api/v1/internal/reminders/dispatch. Optional: reminders run
+      # on an in-process cron regardless. Leave unset to disable the manual trigger — an
+      # unset key means disabled, never open.
+      - key: REMINDER_DISPATCH_KEY
+        sync: false

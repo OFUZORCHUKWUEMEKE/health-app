@@ -94,6 +94,22 @@ export class Appointment extends Document {
 
     @Prop({ type: Date })
     video_ended_at?: Date;
+
+    // ─── Reminder claims ────────────────────────────────
+    /**
+     * Set the instant a reminder was claimed, via a compare-and-set update filtered on the
+     * field being absent. That claim — not the notification write — is what makes the
+     * scheduler safe: it is atomic, so it holds under multiple instances without needing a
+     * lock or an extra collection.
+     *
+     * Named per offset rather than a single `reminder_sent_at` so adding a third offset
+     * later is additive instead of a migration.
+     */
+    @Prop({ type: Date })
+    reminder_24h_sent_at?: Date;
+
+    @Prop({ type: Date })
+    reminder_1h_sent_at?: Date;
 }
 
 export const AppointmentSchema = SchemaFactory.createForClass(Appointment);
@@ -111,3 +127,8 @@ AppointmentSchema.index({ doctor_id: 1, scheduled_start_at_utc: 1, status: 1 });
 AppointmentSchema.index({ patient_id: 1, scheduled_start_at_utc: 1 });
 AppointmentSchema.index({ patient_id: 1, status: 1, scheduled_start_at_utc: 1 });
 AppointmentSchema.index({ consultation_id: 1 }, { unique: true, sparse: true });
+
+// The reminder scan runs every 5 minutes and leads with status; none of the indexes above
+// do. Deliberately NOT a partial index on `reminder_*_sent_at: {$exists: false}` —
+// $exists is unsupported in partialFilterExpression.
+AppointmentSchema.index({ status: 1, scheduled_start_at_utc: 1 });
