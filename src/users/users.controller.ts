@@ -123,9 +123,31 @@ export class UsersController extends CoreController {
                 marital_status: { type: 'string' },
                 occupation: { type: 'string' },
                 address: { type: 'string' },
-                allergies: { type: 'array', items: { type: 'string' } },
-                previous_medical_conditions: { type: 'array', items: { type: 'string' } },
-                medical_flags: { type: 'array', items: { type: 'string' } },
+                allergies: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    example: ['Penicillin', 'Peanuts'],
+                    description:
+                        'Replaces the stored list entirely; send [] to clear it. Over ' +
+                        'multipart, repeat the field per value or send a JSON array ' +
+                        'string. Values are not split on commas.',
+                },
+                previous_medical_conditions: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    example: ['Asthma', 'Hypertension'],
+                    description:
+                        'Replaces the stored list entirely; send [] to clear it. Same ' +
+                        'multipart handling as allergies.',
+                },
+                medical_flags: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    example: ['diabetic'],
+                    description:
+                        'Clinical flags surfaced to doctors. Replaces the stored list ' +
+                        'entirely. Same multipart handling as allergies.',
+                },
                 file: { type: 'string', format: 'binary' },
                 image: { type: 'string', format: 'binary' },
                 profile_picture: { type: 'string', format: 'binary' },
@@ -187,9 +209,31 @@ export class UsersController extends CoreController {
                 marital_status: { type: 'string' },
                 occupation: { type: 'string' },
                 address: { type: 'string' },
-                allergies: { type: 'array', items: { type: 'string' } },
-                previous_medical_conditions: { type: 'array', items: { type: 'string' } },
-                medical_flags: { type: 'array', items: { type: 'string' } },
+                allergies: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    example: ['Penicillin', 'Peanuts'],
+                    description:
+                        'Replaces the stored list entirely; send [] to clear it. Over ' +
+                        'multipart, repeat the field per value or send a JSON array ' +
+                        'string. Values are not split on commas.',
+                },
+                previous_medical_conditions: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    example: ['Asthma', 'Hypertension'],
+                    description:
+                        'Replaces the stored list entirely; send [] to clear it. Same ' +
+                        'multipart handling as allergies.',
+                },
+                medical_flags: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    example: ['diabetic'],
+                    description:
+                        'Clinical flags surfaced to doctors. Replaces the stored list ' +
+                        'entirely. Same multipart handling as allergies.',
+                },
                 file: { type: 'string', format: 'binary' },
                 image: { type: 'string', format: 'binary' },
                 profile_picture: { type: 'string', format: 'binary' },
@@ -358,6 +402,7 @@ export class UsersController extends CoreController {
     @Roles(Role.ADMIN)
     @ApiBearerAuth()
     @ApiOperation({ summary: 'Edit a patient profile by id (Admin only)' })
+    @ApiBody({ type: UpdatePatientProfileDto })
     @ApiResponse({ status: 200, description: 'Profile updated successfully' })
     async adminUpdatePatientProfile(
         @Param('id') id: string,
