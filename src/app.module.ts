@@ -14,6 +14,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 import * as leanVirtuals from 'mongoose-lean-virtuals';
 import { BookingsModule } from './bookings/bookings.module';
 import { VideoModule } from './video/video.module';
+import { logIndexBuildFailures } from './database/index-error-logger';
 
 
 @Module({
@@ -38,6 +39,7 @@ import { VideoModule } from './video/video.module';
           retryAttempts: 3,
           connectionFactory: (connection) => {
             connection.plugin(leanVirtuals);
+            logIndexBuildFailures(connection);
             return connection;
           },
         };

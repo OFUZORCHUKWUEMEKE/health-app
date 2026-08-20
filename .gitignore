@@ -42,5 +42,6 @@ lerna-debug.log*
 !.vscode/launch.json
 !.vscode/extensions.json
 
-# MRN backfill mapping files (old→new medical record numbers — never commit)
-scripts/backfill-mrn.*.json
+# Backfill mapping files — the rollback trail for a migration. They carry real
+# emails and ObjectIds, so keep them local rather than in the repo.
+scripts/backfill-*.json
