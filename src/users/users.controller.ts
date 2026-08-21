@@ -48,6 +48,44 @@ export class UsersController extends CoreController {
     @UseGuards(RolesGuard)
     @Roles(Role.PATIENT)
     @ApiBearerAuth()
+    @ApiOperation({
+        summary: 'Get logged-in patient summary',
+        description:
+            'Returns the account and profile fields a client needs for a header or ' +
+            'profile card, plus the patient-declared medical lists. This is a fixed ' +
+            'subset — use GET /patients/me/profile for the full stored document.',
+    })
+    @ApiResponse({
+        status: 200,
+        description: 'Patient summary fetched successfully',
+        schema: {
+            example: {
+                success: true,
+                response_code: '00',
+                response_description: 'Success',
+                data: {
+                    _id: '67d4f0be0dc8b8aa6d9f0aaa',
+                    registration_no: 'PAT-M8X2K1-9QZT',
+                    mrn: 'C-4KD9PX',
+                    first_name: 'Ada',
+                    last_name: 'Obi',
+                    full_name: 'Ada Obi',
+                    email: 'ada.obi@example.com',
+                    phone_number: '+2348012345678',
+                    verified: true,
+                    profile_picture_url:
+                        'https://res.cloudinary.com/demo/image/upload/v1/health-app/profile-pictures/patient.jpg',
+                    date_of_birth: '1994-03-12T00:00:00.000Z',
+                    gender: 'female',
+                    occupation: 'Architect',
+                    marital_status: 'single',
+                    timezone: 'Africa/Lagos',
+                    allergies: ['Peanuts', 'Latex'],
+                    previous_medical_conditions: ['Asthma'],
+                },
+            },
+        },
+    })
     async fetchLoggedInUser(
         @CurrentUser() user: any,
         @Res({ passthrough: true }) res: Response,
