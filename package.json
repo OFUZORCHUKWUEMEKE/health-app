@@ -22,6 +22,7 @@
     "backfill:mrn": "node scripts/backfill-mrn.js",
     "rollback:mrn": "node scripts/rollback-mrn.js",
     "backfill:identifiers": "node scripts/backfill-identifier.js --target=all",
+    "backfill:consultation-for": "node scripts/backfill-consultation-for.js",
     "audit:indexes": "node scripts/audit-indexes.js",
     "test:debug": "NODE_OPTIONS=--max-old-space-size=3072 node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "NODE_OPTIONS=--max-old-space-size=3072 jest --config ./test/jest-e2e.json --runInBand"
