@@ -32,7 +32,7 @@ fixed. Trust the code, not that file.
 pnpm install
 pnpm run start:dev      # watch mode
 pnpm run build          # nest build
-pnpm run test           # jest, runInBand — 151 tests, all passing
+pnpm run test           # jest, runInBand — 158 tests, all passing
 pnpm run test:cov
 pnpm run lint           # eslint --fix
 pnpm run format         # prettier
@@ -146,6 +146,26 @@ in the doctor's own zone and converted at query time, DST-correct. Validation de
 
 Never do timezone math ad hoc — go through the existing helpers.
 
+### Patient medical lists
+
+`User.allergies` and `User.previous_medical_conditions` are written from two places, on
+deliberately different terms. Preserve the asymmetry:
+
+- **Booking is additive intake.** `reconcilePatientProfileFromSelfBooking`
+  (`bookings.service.ts`) merges the declared lists into the profile as a **case-insensitive
+  union** — entries are added, never removed — and only when `appointment_for` is `SELF`. Two
+  reasons, both clinical: an intake form filled in a hurry may arrive blank or partial, and
+  replacing on that basis would silently drop a recorded allergy; and someone else's history
+  must never land on the booker's record.
+- **`PATCH /patients/me/profile` is the authoritative edit** and *replaces* the list outright.
+  Removing an entry happens there and nowhere else.
+
+The same values are separately snapshotted onto the appointment and prefill the doctor's
+history-taking form (`resolveHistoryTakingPrefillFromAppointment`). Keep that snapshot a plain
+copy — it records what was declared *for that visit*, not the patient's whole file.
+
+Don't "simplify" the merge back into an assignment, and don't extend it to `OTHERS` bookings.
+
 ### Events and notifications
 
 Domain operations emit typed events (`common/events/`) via `@nestjs/event-emitter`; listeners in
@@ -188,6 +208,9 @@ Don't "fix" these incidentally; they're either deliberate or load-bearing.
   of the API contract now. Renaming it is a migration, not a typo fix.
 - **CORS is intentionally open to all origins** by default (`c50de42` deliberately reverted an
   allowlist). Setting `CORS_ORIGINS` restricts it again.
+- **Two names for one field**: the booking DTO sends `Medical_conditions` (capital M, no prefix);
+  it lands on the user document as `previous_medical_conditions`. Both spellings are in the API
+  contract — the translation happens in the booking service.
 - **Dead code**: `consultations/controllers/consultations.controller.ts` is entirely commented out;
   `consultations/controllers/doctors.controller.ts` has large commented blocks.
 - **Route ordering matters** in `doctors.controller.ts` and `users.controller.ts` — literal routes
