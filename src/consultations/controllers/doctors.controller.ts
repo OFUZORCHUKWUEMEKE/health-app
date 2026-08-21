@@ -26,8 +26,9 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { CoreController } from 'src/common/core/controller.core';
-import { DoctorGuard } from 'src/auth/guard/doctor.guard';
-import { GeneralGuard } from 'src/auth/guard/general.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { Roles } from 'src/common/decorators';
+import { Role } from 'src/common/enums';
 import { ConsultationsService } from '../consultations.service';
 import { CreateConsultationDto } from '../dto/create-consultation.dto';
 import { DiagnosisDto } from '../dto/create-dignosis.dto';
@@ -323,6 +324,8 @@ const patientMedicalHistoryResponseExample = [
 ];
 
 @ApiTags('Doctor Consultations')
+@UseGuards(RolesGuard)
+@Roles(Role.DOCTOR)
 @Controller('doctors/consultations')
 export class DoctorsController extends CoreController {
   constructor(private readonly consultationsService: ConsultationsService) {
@@ -330,7 +333,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get()
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get all consultations for logged-in doctor (paginated)',
@@ -355,7 +357,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/all')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get all consultations for logged-in doctor (no pagination)',
@@ -377,7 +378,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Post('/appointments/:appointment_id/start')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Start a consultation from an appointment (doctor only)',
@@ -408,7 +408,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Patch('/:consultation_id/complete')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Mark a consultation as complete (doctor only)' })
   @ApiParam({ name: 'consultation_id', description: 'Consultation id' })
@@ -436,7 +435,6 @@ export class DoctorsController extends CoreController {
   // IMPORTANT: these must stay above @Get('/:consultation_id') to avoid route conflict
 
   @Get('/patients/:patient_id/history')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary:
@@ -460,7 +458,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/patients/:patient_id/history/consultations')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Get a patient's consultation history" })
   @ApiParam({ name: 'patient_id', description: 'Patient (user) id' })
@@ -509,7 +506,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/patients/:patient_id/history/medications')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Get a patient's medication history" })
   @ApiParam({ name: 'patient_id', description: 'Patient (user) id' })
@@ -561,7 +557,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/patients/:patient_id/history/diagnoses')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Get a patient's diagnosis history" })
   @ApiParam({ name: 'patient_id', description: 'Patient (user) id' })
@@ -607,7 +602,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/patients/:patient_id/history/investigations')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: "Get a patient's assigned investigation history grouped by consultation",
@@ -678,7 +672,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/medications/grouped-by-consultation')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get doctor medications grouped by consultation',
@@ -712,7 +705,6 @@ export class DoctorsController extends CoreController {
   // ─── Single Consultation ───────────────────────────
 
   @Get('/:consultation_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary:
@@ -821,7 +813,6 @@ export class DoctorsController extends CoreController {
   // }
 
   @Post('/:consultation_id/medication')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Create medication for a consultation (doctor only)',
@@ -855,7 +846,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/:consultation_id/medication')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get medication by consultation (doctor only)' })
   @ApiParam({ name: 'consultation_id', description: 'Consultation id' })
@@ -880,7 +870,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/:consultation_id/medications/grouped')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary:
@@ -949,7 +938,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/medication/:medication_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get a single medication record (doctor only)' })
   @ApiParam({ name: 'medication_id', description: 'Medication id' })
@@ -975,7 +963,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Patch('medication/:medication_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update medication record (doctor only)' })
   @ApiParam({ name: 'medication_id', description: 'Medication id' })
@@ -1007,7 +994,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Delete('medication/:medication_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete medication record (doctor only)' })
   @ApiParam({ name: 'medication_id', description: 'Medication id' })
@@ -1030,7 +1016,6 @@ export class DoctorsController extends CoreController {
 
   @ApiExcludeEndpoint()
   @Get('/:consultation_id/complaint_history')
-  @UseGuards(DoctorGuard)
   async getComplaintHistory(
     @Res({ passthrough: true }) res: Response,
     @Req() req,
@@ -1045,7 +1030,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Post('/:consultation_id/physical-exam')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Create physical exam for a consultation (doctor only)',
@@ -1079,7 +1063,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/:consultation_id/physical-exam')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get physical exam for a consultation (doctor only)',
@@ -1105,7 +1088,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Patch('physical-exam/:physical_exam_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update physical exam record (doctor only)' })
   @ApiParam({ name: 'physical_exam_id', description: 'Physical exam id' })
@@ -1132,7 +1114,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Delete('physical-exam/:physical_exam_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete physical exam record (doctor only)' })
   @ApiParam({ name: 'physical_exam_id', description: 'Physical exam id' })
@@ -1156,7 +1137,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('consultation/weekly')
-  @UseGuards(DoctorGuard)
   async getWeeklyConsultation(
     @Res({ passthrough: true }) res: Response,
     @Req() req,
@@ -1170,7 +1150,6 @@ export class DoctorsController extends CoreController {
   // ─── History Taking ────────────────────────────────
 
   @Post('/:consultation_id/history-taking')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Create history taking for a consultation (doctor only)',
@@ -1204,7 +1183,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/:consultation_id/history-taking')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get history taking for a consultation (doctor only)',
@@ -1238,7 +1216,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Patch('history-taking/:history_taking_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update history taking record (doctor only)' })
   @ApiParam({ name: 'history_taking_id', description: 'History taking id' })
@@ -1266,7 +1243,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Delete('history-taking/:history_taking_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete history taking record (doctor only)' })
   @ApiParam({ name: 'history_taking_id', description: 'History taking id' })
@@ -1293,7 +1269,6 @@ export class DoctorsController extends CoreController {
   // ─── Investigation Form ────────────────────────────
 
   @Post('/:consultation_id/investigation-result')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Create investigation result for a consultation (doctor only)',
@@ -1326,7 +1301,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/:consultation_id/investigation-result')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get investigation result for a consultation (doctor only)',
@@ -1352,7 +1326,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Patch('investigation-result/:investigation_form_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update investigation result record (doctor only)' })
   @ApiParam({
@@ -1382,7 +1355,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Delete('investigation-result/:investigation_form_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete investigation result record (doctor only)' })
   @ApiParam({
@@ -1413,7 +1385,6 @@ export class DoctorsController extends CoreController {
   // ─── Investigation List ───────────────────────────
 
   @Post('/:consultation_id/investigation-list')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Create investigation list for a consultation (doctor only)',
@@ -1441,7 +1412,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/:consultation_id/investigation-list')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get investigation lists by consultation (doctor only)',
@@ -1466,7 +1436,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/investigation-list/:investigation_list_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get single investigation list record (doctor only)',
@@ -1494,7 +1463,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Patch('/investigation-list/:investigation_list_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update investigation list record (doctor only)' })
   @ApiParam({
@@ -1523,7 +1491,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Delete('/investigation-list/:investigation_list_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete investigation list record (doctor only)' })
   @ApiParam({
@@ -1551,7 +1518,6 @@ export class DoctorsController extends CoreController {
   // ─── Treatment Plan ────────────────────────────────
 
   @Post('/:consultation_id/treatment-plan')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Create treatment plan for a consultation (doctor only)',
@@ -1584,7 +1550,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/:consultation_id/treatment-plan')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get treatment plan for a consultation (doctor only)',
@@ -1610,7 +1575,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Patch('treatment-plan/:treatment_plan_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update treatment plan record (doctor only)' })
   @ApiParam({ name: 'treatment_plan_id', description: 'Treatment plan id' })
@@ -1637,7 +1601,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Delete('treatment-plan/:treatment_plan_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete treatment plan record (doctor only)' })
   @ApiParam({ name: 'treatment_plan_id', description: 'Treatment plan id' })
@@ -1663,7 +1626,6 @@ export class DoctorsController extends CoreController {
   // ─── Diagnosis Form ────────────────────────────────
 
   @Post('/:consultation_id/diagnosis-form')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Create diagnosis form for a consultation (doctor only)',
@@ -1696,7 +1658,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/:consultation_id/diagnosis-form')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get diagnosis form for a consultation (doctor only)',
@@ -1722,7 +1683,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Patch('diagnosis-form/:diagnosis_form_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update diagnosis form record (doctor only)' })
   @ApiParam({ name: 'diagnosis_form_id', description: 'Diagnosis form id' })
@@ -1749,7 +1709,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Delete('diagnosis-form/:diagnosis_form_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete diagnosis form record (doctor only)' })
   @ApiParam({ name: 'diagnosis_form_id', description: 'Diagnosis form id' })
@@ -1775,7 +1734,6 @@ export class DoctorsController extends CoreController {
   // ---------- Referrals (doctor CRUD) ----------
 
   @Post('/:consultation_id/referral')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Create a referral for a consultation (doctor only)',
@@ -1834,7 +1792,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/:consultation_id/referral')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'List referrals for a consultation (doctor only)',
@@ -1877,7 +1834,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/referrals/grouped')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'List referrals grouped by consultation (doctor only)',
@@ -1944,7 +1900,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Get('/referral/:referral_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get a single referral record (doctor only)',
@@ -1983,7 +1938,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Patch('/referral/:referral_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Update a referral record (doctor only)',
@@ -2040,7 +1994,6 @@ export class DoctorsController extends CoreController {
   }
 
   @Delete('/referral/:referral_id')
-  @UseGuards(DoctorGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Delete a referral record (doctor only)',

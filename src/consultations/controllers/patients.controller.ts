@@ -3,14 +3,17 @@ import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
 import { ApiExcludeEndpoint, ApiOperation, ApiParam, ApiResponse, ApiQuery, ApiBearerAuth, ApiTags, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { CoreController } from 'src/common/core/controller.core';
-import { PatientGuard } from 'src/auth/guard/patient.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { Roles } from 'src/common/decorators';
+import { Role } from 'src/common/enums';
 import { ConsultationsService } from '../consultations.service';
 import { CoreSearchFilterDatePaginationDto } from 'src/common/core/dto.core';
 import { CreateCompliantHistoryDto } from '../dto/create-history.dto';
 
 @ApiTags('Patient Consultations')
 @Controller('patients/consultations')
-@UseGuards(PatientGuard)
+@UseGuards(RolesGuard)
+@Roles(Role.PATIENT)
 export class PatientsController extends CoreController {
     constructor(
         private readonly consultationsService: ConsultationsService
