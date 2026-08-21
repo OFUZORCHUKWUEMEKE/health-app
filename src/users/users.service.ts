@@ -54,6 +54,11 @@ export class UsersService extends CoreService<UserRepository> {
             occupation: user.occupation ?? null,
             marital_status: user.marital_status ?? null,
             timezone: user.timezone ?? null,
+            // Default to [] rather than null: the schema defaults these to [], so only
+            // pre-existing documents written before the fields existed can be missing,
+            // and a client rendering a list should not have to handle both shapes.
+            allergies: user.allergies ?? [],
+            previous_medical_conditions: user.previous_medical_conditions ?? [],
         };
     }
 
