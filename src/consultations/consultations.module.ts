@@ -35,6 +35,8 @@ import { DiagnosisFormRepository } from './diagnosis-form.repository';
 import { Appointment, AppointmentSchema } from 'src/bookings/models/appointment.model';
 import { InvestigationListRepository } from './investigation-list.repository';
 import { CloudinaryModule } from 'src/cloudinary/cloudinary.module';
+import { AdminModule } from 'src/admin/admin.module';
+import { RolesGuard } from 'src/common/guards/roles.guard';
 
 @Module({
   imports: [
@@ -56,10 +58,14 @@ import { CloudinaryModule } from 'src/cloudinary/cloudinary.module';
     AuthModule,
     DoctorsModule,
     UsersModule,
+    // Completes the three repositories RolesGuard resolves a caller through;
+    // DoctorsModule and UsersModule already covered the other two.
+    AdminModule,
     CloudinaryModule,
   ],
   controllers: [PatientsController, DoctorsController],
   providers: [
+    RolesGuard,
     ConsultationsService,
     ConsultationRepository,
     ConsultationFactory,
