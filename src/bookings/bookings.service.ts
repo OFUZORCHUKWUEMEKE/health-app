@@ -1060,20 +1060,26 @@ export class BookingsService implements OnModuleInit {
         }
 
         if (dto.allergies !== undefined) {
-            const nextAllergies = this.normalizeStringArray(dto.allergies);
             const currentAllergies = this.normalizeStringArray(patient.allergies);
-            if (!this.stringArraysEqual(nextAllergies, currentAllergies)) {
-                updates.allergies = nextAllergies;
+            const mergedAllergies = this.mergeStringArrays(
+                currentAllergies,
+                this.normalizeStringArray(dto.allergies),
+            );
+            if (!this.stringArraysEqual(mergedAllergies, currentAllergies)) {
+                updates.allergies = mergedAllergies;
             }
         }
 
         if (dto.Medical_conditions !== undefined) {
-            const nextConditions = this.normalizeStringArray(dto.Medical_conditions);
             const currentConditions = this.normalizeStringArray(
                 patient.previous_medical_conditions,
             );
-            if (!this.stringArraysEqual(nextConditions, currentConditions)) {
-                updates.previous_medical_conditions = nextConditions;
+            const mergedConditions = this.mergeStringArrays(
+                currentConditions,
+                this.normalizeStringArray(dto.Medical_conditions),
+            );
+            if (!this.stringArraysEqual(mergedConditions, currentConditions)) {
+                updates.previous_medical_conditions = mergedConditions;
             }
         }
 
@@ -1100,6 +1106,35 @@ export class BookingsService implements OnModuleInit {
         return (values ?? [])
             .map((value) => value.trim())
             .filter(Boolean);
+    }
+
+    /**
+     * Union of the stored list and what the booking form sent, compared
+     * case-insensitively, keeping the order and the stored casing of `current`.
+     *
+     * Booking is additive intake, not an authoritative edit of the record. The form is
+     * filled in a hurry and may well arrive blank or partial for a patient who already
+     * has allergies on file, so replacing the stored list here would silently drop
+     * clinical data — the one kind of loss this profile cannot afford. Removing an entry
+     * stays an explicit action on PATCH /patients/me/profile, which does replace.
+     *
+     * Case-insensitive because "penicillin" and "Penicillin" are the same allergy and a
+     * patient retyping it at every booking must not accumulate duplicates.
+     */
+    private mergeStringArrays(current: string[], incoming: string[]) {
+        const merged: string[] = [];
+        const seen = new Set<string>();
+
+        for (const value of [...current, ...incoming]) {
+            const key = value.toLowerCase();
+            if (seen.has(key)) {
+                continue;
+            }
+            seen.add(key);
+            merged.push(value);
+        }
+
+        return merged;
     }
 
     private stringArraysEqual(left: string[], right: string[]) {

@@ -217,6 +217,83 @@ describe('BookingsService', () => {
         );
     });
 
+    describe('medical list reconciliation is additive', () => {
+        const patientId = new Types.ObjectId();
+
+        const reconcile = async (
+            stored: Record<string, any>,
+            sent: Record<string, any>,
+        ) => {
+            const slotDay = futureUtcMonday();
+            userRepository.findOne.mockResolvedValue({
+                _id: patientId,
+                first_name: 'Ada',
+                last_name: 'Okafor',
+                ...stored,
+            });
+            userRepository.findOneAndUpdate.mockResolvedValue({});
+
+            await (service as any).reconcilePatientProfileFromSelfBooking(
+                patientId.toString(),
+                {
+                    first_name: 'Ada',
+                    last_name: 'Okafor',
+                    present_complaint: 'Headache',
+                    scheduled_start_local: localIsoAt(slotDay, 10),
+                    requested_duration_minutes: 30,
+                    confirm_appointment: true,
+                    ...sent,
+                },
+            );
+
+            return userRepository.findOneAndUpdate.mock.calls[0]?.[1]?.$set;
+        };
+
+        it('keeps stored allergies the booking form did not repeat', async () => {
+            const update = await reconcile(
+                { allergies: ['Penicillin', 'Latex'] },
+                { allergies: ['Peanuts'] },
+            );
+
+            expect(update.allergies).toEqual(['Penicillin', 'Latex', 'Peanuts']);
+        });
+
+        it('does not clear stored lists when the booking form sends empty ones', async () => {
+            const update = await reconcile(
+                {
+                    allergies: ['Penicillin'],
+                    previous_medical_conditions: ['Asthma'],
+                },
+                { allergies: [], Medical_conditions: [] },
+            );
+
+            expect(update).toBeUndefined();
+            expect(userRepository.findOneAndUpdate).not.toHaveBeenCalled();
+        });
+
+        it('treats a re-typed entry as the same one regardless of casing', async () => {
+            const update = await reconcile(
+                { allergies: ['Penicillin'] },
+                { allergies: ['penicillin', 'PENICILLIN'] },
+            );
+
+            expect(update).toBeUndefined();
+            expect(userRepository.findOneAndUpdate).not.toHaveBeenCalled();
+        });
+
+        it('merges medical conditions onto the stored list', async () => {
+            const update = await reconcile(
+                { previous_medical_conditions: ['Hypertension'] },
+                { Medical_conditions: ['Asthma', 'hypertension'] },
+            );
+
+            expect(update.previous_medical_conditions).toEqual([
+                'Hypertension',
+                'Asthma',
+            ]);
+        });
+    });
+
     it('skips profile reconciliation when booking for someone else', async () => {
         const patientId = new Types.ObjectId();
         const doctorId = new Types.ObjectId();
