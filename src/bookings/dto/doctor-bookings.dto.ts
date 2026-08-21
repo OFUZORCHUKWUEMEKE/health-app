@@ -512,6 +512,12 @@ export class CreatePatientAppointmentDto {
     @ApiPropertyOptional({
         type: [String],
         example: ['Hypertension', 'Asthma'],
+        description:
+            'Conditions declared for this booking. Snapshotted onto the appointment. ' +
+            'When appointment_for is SELF these are also merged into the patient ' +
+            'profile — added, never removed, matched case-insensitively — so sending a ' +
+            'short or empty list here cannot clear what is already on file. Use ' +
+            'PATCH /patients/me/profile to remove an entry.',
     })
     @IsOptional()
     @IsArray()
@@ -521,6 +527,10 @@ export class CreatePatientAppointmentDto {
     @ApiPropertyOptional({
         type: [String],
         example: ['Penicillin', 'Peanuts'],
+        description:
+            'Allergies declared for this booking. Snapshotted onto the appointment and ' +
+            'used to prefill the doctor\'s history-taking form. Merged into the patient ' +
+            'profile on the same additive terms as Medical_conditions.',
     })
     @IsOptional()
     @IsArray()
