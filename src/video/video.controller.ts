@@ -3,7 +3,6 @@ import {
   Get,
   Patch,
   Param,
-  Req,
   Res,
   HttpStatus,
   UseGuards,
@@ -15,10 +14,11 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { Response, Request } from 'express';
+import { Response } from 'express';
 import { VideoService } from './video.service';
-import { DoctorGuard } from 'src/auth/guard/doctor.guard';
-import { PatientGuard } from 'src/auth/guard/patient.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { CurrentUser, Roles } from 'src/common/decorators';
+import { Role } from 'src/common/enums';
 import { CoreController } from 'src/common/core/controller.core';
 
 const VIDEO_TOKEN_RESPONSE_EXAMPLE = {
@@ -50,7 +50,8 @@ export class VideoController extends CoreController {
     super();
   }
 
-  @UseGuards(DoctorGuard)
+  @UseGuards(RolesGuard)
+  @Roles(Role.DOCTOR)
   @Get('doctors/me/appointments/:id/video-token')
   @ApiBearerAuth()
   @ApiOperation({
@@ -92,15 +93,15 @@ export class VideoController extends CoreController {
   })
   async getDoctorToken(
     @Param('id') id: string,
-    @Req() req: Request,
+    @CurrentUser() doctor: any,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const doctor = (req as any)['doctor'];
     const data = await this.videoService.getDoctorVideoToken(id, doctor);
     return this.responseSuccess(res, '00', 'Success', data, HttpStatus.OK);
   }
 
-  @UseGuards(PatientGuard)
+  @UseGuards(RolesGuard)
+  @Roles(Role.PATIENT)
   @Get('patients/me/appointments/:id/video-token')
   @ApiBearerAuth()
   @ApiOperation({
@@ -143,15 +144,15 @@ export class VideoController extends CoreController {
   })
   async getPatientToken(
     @Param('id') id: string,
-    @Req() req: Request,
+    @CurrentUser() patient: any,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const patient = (req as any)['patient'];
     const data = await this.videoService.getPatientVideoToken(id, patient);
     return this.responseSuccess(res, '00', 'Success', data, HttpStatus.OK);
   }
 
-  @UseGuards(DoctorGuard)
+  @UseGuards(RolesGuard)
+  @Roles(Role.DOCTOR)
   @Patch('doctors/me/appointments/:id/video/start')
   @ApiBearerAuth()
   @ApiOperation({
@@ -186,10 +187,9 @@ export class VideoController extends CoreController {
   })
   async startSession(
     @Param('id') id: string,
-    @Req() req: Request,
+    @CurrentUser() doctor: any,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const doctor = (req as any)['doctor'];
     await this.videoService.markSessionStarted(id, doctor._id);
     return this.responseSuccess(
       res,
@@ -200,7 +200,8 @@ export class VideoController extends CoreController {
     );
   }
 
-  @UseGuards(DoctorGuard)
+  @UseGuards(RolesGuard)
+  @Roles(Role.DOCTOR)
   @Patch('doctors/me/appointments/:id/video/end')
   @ApiBearerAuth()
   @ApiOperation({
@@ -232,10 +233,9 @@ export class VideoController extends CoreController {
   })
   async endSession(
     @Param('id') id: string,
-    @Req() req: Request,
+    @CurrentUser() doctor: any,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const doctor = (req as any)['doctor'];
     await this.videoService.markSessionEnded(id, doctor._id);
     return this.responseSuccess(
       res,
