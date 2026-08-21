@@ -1,7 +1,16 @@
 import { Types } from 'mongoose';
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
-import { AppointmentStatus } from 'src/common/enums';
-import { ConsultationStatusEnum } from 'src/consultations/consultations.enums';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  InternalServerErrorException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { AppointmentFor, AppointmentStatus } from 'src/common/enums';
+import {
+  ConsultationForEnum,
+  ConsultationStatusEnum,
+} from 'src/consultations/consultations.enums';
 
 const mockApi = { post: jest.fn(), get: jest.fn() };
 
@@ -51,12 +60,21 @@ describe('VideoService', () => {
     appointmentId = new Types.ObjectId();
     consultationId = new Types.ObjectId();
 
+    // A configured deployment is the default. Tests covering the unconfigured case
+    // override this — see "configuration".
+    configService.get.mockImplementation((key: string) =>
+      key === 'daily.api_key' ? 'test-daily-key' : undefined,
+    );
+
     service = new VideoService(
       configService as any,
       appointmentModel as any,
       consultationModel as any,
       eventEmitter as any,
     );
+
+    // Retries must never actually sleep — the suite is unit-only and runs in band.
+    jest.spyOn(service as any, 'delay').mockResolvedValue(undefined);
 
     appointmentModel.updateOne.mockResolvedValue({});
     consultationModel.findOneAndUpdate.mockResolvedValue({
@@ -362,7 +380,9 @@ describe('VideoService', () => {
       );
 
       await expect(
-        service.getDoctorVideoToken(appointmentId.toString(), { _id: doctorId }),
+        service.getDoctorVideoToken(appointmentId.toString(), {
+          _id: doctorId,
+        }),
       ).rejects.toThrow();
 
       expect(roomOpenedCalls()).toHaveLength(0);
@@ -472,7 +492,15 @@ describe('VideoService', () => {
       await service.markSessionStarted(appointmentId.toString(), doctorId);
 
       expect(consultationModel.findOneAndUpdate).toHaveBeenCalledWith(
-        { appointment_id: appointmentId },
+        {
+          appointment_id: appointmentId,
+          status: {
+            $nin: [
+              ConsultationStatusEnum.COMPLETED,
+              ConsultationStatusEnum.CANCELED,
+            ],
+          },
+        },
         { $set: { status: ConsultationStatusEnum.ACTIVE } },
         { new: true, select: '_id' },
       );
@@ -485,6 +513,7 @@ describe('VideoService', () => {
     it('fails loudly when there is no consultation to activate', async () => {
       appointmentModel.findById.mockResolvedValue(buildAppointment());
       consultationModel.findOneAndUpdate.mockResolvedValue(null);
+      consultationModel.findOne.mockResolvedValue(null);
 
       await expect(
         service.markSessionStarted(appointmentId.toString(), doctorId),
@@ -515,6 +544,452 @@ describe('VideoService', () => {
       ).rejects.toThrow(ForbiddenException);
 
       expect(appointmentModel.updateOne).not.toHaveBeenCalled();
+    });
+  });
+
+  // The consultation records who the visit is FOR, and it is projected into both
+  // patient- and doctor-facing responses. Hardcoding SELF here mislabelled every
+  // consultation booked on someone else's behalf.
+  describe('consultation provenance', () => {
+    const insertedDoc = () =>
+      consultationModel.findOneAndUpdate.mock.calls[0][1].$setOnInsert;
+
+    it('records OTHERS when the appointment was booked for someone else', async () => {
+      appointmentModel.findById.mockResolvedValue(
+        buildAppointment({ appointment_for: AppointmentFor.OTHERS }),
+      );
+
+      await service.getDoctorVideoToken(appointmentId.toString(), {
+        _id: doctorId,
+      });
+
+      expect(insertedDoc().consoltation_for).toBe(ConsultationForEnum.OTHERS);
+    });
+
+    it('records SELF when the appointment was booked for the patient', async () => {
+      appointmentModel.findById.mockResolvedValue(
+        buildAppointment({ appointment_for: AppointmentFor.SELF }),
+      );
+
+      await service.getDoctorVideoToken(appointmentId.toString(), {
+        _id: doctorId,
+      });
+
+      expect(insertedDoc().consoltation_for).toBe(ConsultationForEnum.SELF);
+    });
+
+    it('defaults to SELF when the appointment predates appointment_for', async () => {
+      appointmentModel.findById.mockResolvedValue(
+        buildAppointment({ appointment_for: undefined }),
+      );
+
+      await service.getDoctorVideoToken(appointmentId.toString(), {
+        _id: doctorId,
+      });
+
+      expect(insertedDoc().consoltation_for).toBe(ConsultationForEnum.SELF);
+    });
+
+    it('creates the consultation as an ACTIVE video consultation', async () => {
+      appointmentModel.findById.mockResolvedValue(buildAppointment());
+
+      await service.getDoctorVideoToken(appointmentId.toString(), {
+        _id: doctorId,
+      });
+
+      expect(insertedDoc()).toMatchObject({
+        appointment_id: appointmentId,
+        doctor_id: doctorId,
+        user_id: patientId,
+        status: ConsultationStatusEnum.ACTIVE,
+      });
+    });
+  });
+
+  describe('session state guards', () => {
+    it('refuses to reactivate a completed consultation', async () => {
+      appointmentModel.findById.mockResolvedValue(buildAppointment());
+      consultationModel.findOneAndUpdate.mockResolvedValue(null);
+      consultationModel.findOne.mockResolvedValue({
+        _id: consultationId,
+        status: ConsultationStatusEnum.COMPLETED,
+      });
+
+      await expect(
+        service.markSessionStarted(appointmentId.toString(), doctorId),
+      ).rejects.toThrow(ConflictException);
+
+      expect(appointmentModel.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('refuses to reactivate a canceled consultation', async () => {
+      appointmentModel.findById.mockResolvedValue(buildAppointment());
+      consultationModel.findOneAndUpdate.mockResolvedValue(null);
+      consultationModel.findOne.mockResolvedValue({
+        _id: consultationId,
+        status: ConsultationStatusEnum.CANCELED,
+      });
+
+      await expect(
+        service.markSessionStarted(appointmentId.toString(), doctorId),
+      ).rejects.toThrow(/already CANCELED/);
+    });
+
+    it('refuses to start a session on an unconfirmed appointment', async () => {
+      appointmentModel.findById.mockResolvedValue(
+        buildAppointment({ status: AppointmentStatus.PENDING }),
+      );
+
+      await expect(
+        service.markSessionStarted(appointmentId.toString(), doctorId),
+      ).rejects.toThrow(/confirmed appointments/);
+
+      expect(consultationModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('refuses to start a session for another doctor', async () => {
+      appointmentModel.findById.mockResolvedValue(
+        buildAppointment({ doctor_id: new Types.ObjectId() }),
+      );
+
+      await expect(
+        service.markSessionStarted(appointmentId.toString(), doctorId),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('refuses to start a session outside the appointment window', async () => {
+      appointmentModel.findById.mockResolvedValue(
+        buildAppointment({
+          scheduled_start_at_utc: new Date(Date.now() - 3 * 60 * 60_000),
+          scheduled_end_at_utc: new Date(Date.now() - 2 * 60 * 60_000),
+        }),
+      );
+
+      await expect(
+        service.markSessionStarted(appointmentId.toString(), doctorId),
+      ).rejects.toThrow(/window has already ended/);
+    });
+
+    // The pair describes the span as first join -> last leave, so the two writes are
+    // deliberately asymmetric. Pinned so nobody "fixes" it into a matching guard.
+    it('claims the start once but lets the end move', async () => {
+      appointmentModel.findById.mockResolvedValue(buildAppointment());
+
+      await service.markSessionStarted(appointmentId.toString(), doctorId);
+      await service.markSessionEnded(appointmentId.toString(), doctorId);
+
+      expect(appointmentModel.updateOne).toHaveBeenNthCalledWith(
+        1,
+        { _id: appointmentId, video_started_at: { $exists: false } },
+        { $set: { video_started_at: expect.any(Date) } },
+      );
+      expect(appointmentModel.updateOne).toHaveBeenNthCalledWith(
+        2,
+        { _id: appointmentId },
+        { $set: { video_ended_at: expect.any(Date) } },
+      );
+    });
+
+    it('still ends a session when Daily is not configured', async () => {
+      configService.get.mockReturnValue(undefined);
+      appointmentModel.findById.mockResolvedValue(buildAppointment());
+
+      await expect(
+        service.markSessionEnded(appointmentId.toString(), doctorId),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  describe('configuration', () => {
+    beforeEach(() => {
+      configService.get.mockReturnValue(undefined);
+      appointmentModel.findById.mockResolvedValue(
+        buildAppointment({ daily_room_name: 'consultation-x' }),
+      );
+    });
+
+    it('reports the doctor endpoint unavailable rather than failing as a 500', async () => {
+      await expect(
+        service.getDoctorVideoToken(appointmentId.toString(), {
+          _id: doctorId,
+        }),
+      ).rejects.toThrow(ServiceUnavailableException);
+
+      expect(appointmentModel.findById).not.toHaveBeenCalled();
+      expect(mockApi.post).not.toHaveBeenCalled();
+    });
+
+    it('reports the patient endpoint unavailable too', async () => {
+      await expect(
+        service.getPatientVideoToken(appointmentId.toString(), {
+          _id: patientId,
+        }),
+      ).rejects.toThrow(/not configured/);
+    });
+  });
+
+  describe('room lifetime', () => {
+    it('derives nbf and exp from the shared grace and overrun constants', async () => {
+      const appointment = buildAppointment();
+      appointmentModel.findById.mockResolvedValue(appointment);
+
+      await service.getDoctorVideoToken(appointmentId.toString(), {
+        _id: doctorId,
+      });
+
+      const roomProps = mockApi.post.mock.calls.find(
+        (c) => c[0] === '/rooms',
+      )[1].properties;
+
+      expect(roomProps.nbf).toBe(
+        Math.floor(
+          (appointment.scheduled_start_at_utc.getTime() - 10 * 60_000) / 1000,
+        ),
+      );
+      expect(roomProps.exp).toBe(
+        Math.floor(
+          (appointment.scheduled_end_at_utc.getTime() + 30 * 60_000) / 1000,
+        ),
+      );
+    });
+
+    it('falls back to the appointment end when the room has no stored expiry', async () => {
+      const appointment = buildAppointment({
+        daily_room_name: 'consultation-x',
+        daily_room_url: 'https://carelexa.daily.co/consultation-x',
+        daily_room_expires_at: undefined,
+      });
+      appointmentModel.findById.mockResolvedValue(appointment);
+
+      const result = await service.getPatientVideoToken(
+        appointmentId.toString(),
+        { _id: patientId },
+      );
+
+      expect(result.expiresAt).toBe(
+        appointment.scheduled_end_at_utc.toISOString(),
+      );
+      expect(
+        mockApi.post.mock.calls.find((c) => c[0] === '/meeting-tokens')[1]
+          .properties.exp,
+      ).toBe(Math.floor(appointment.scheduled_end_at_utc.getTime() / 1000));
+    });
+  });
+
+  // Adoption must not depend on Daily's error prose, which their docs describe as
+  // debugging text whose wording is not fixed.
+  describe('room adoption', () => {
+    const roomName = () => `consultation-${appointmentId.toString()}`;
+
+    const rejectCreateWith = (response: any) =>
+      mockApi.post.mockImplementation((url: string) =>
+        url === '/rooms'
+          ? Promise.reject({ response })
+          : Promise.resolve({ data: { token: 'daily-token' } }),
+      );
+
+    it('adopts an existing room even when the 400 carries no info text', async () => {
+      appointmentModel.findById.mockResolvedValue(buildAppointment());
+      rejectCreateWith({
+        status: 400,
+        data: { error: 'invalid-request-error' },
+      });
+      mockApi.get.mockResolvedValue({
+        data: {
+          name: roomName(),
+          url: `https://carelexa.daily.co/${roomName()}`,
+          config: { exp: 1900000000 },
+        },
+      });
+
+      await service.getDoctorVideoToken(appointmentId.toString(), {
+        _id: doctorId,
+      });
+
+      expect(mockApi.get).toHaveBeenCalledWith(`/rooms/${roomName()}`);
+      expect(appointmentModel.updateOne).toHaveBeenCalledWith(
+        { _id: appointmentId },
+        {
+          $set: expect.objectContaining({
+            daily_room_name: roomName(),
+            daily_room_expires_at: new Date(1900000000 * 1000),
+          }),
+        },
+      );
+    });
+
+    it('surfaces the original failure when the room does not actually exist', async () => {
+      appointmentModel.findById.mockResolvedValue(buildAppointment());
+      rejectCreateWith({
+        status: 400,
+        data: { error: 'invalid-request-error' },
+      });
+      mockApi.get.mockRejectedValue({ response: { status: 404 } });
+
+      await expect(
+        service.getDoctorVideoToken(appointmentId.toString(), {
+          _id: doctorId,
+        }),
+      ).rejects.toThrow(/Failed to create video room/);
+    });
+
+    it('does not go looking for a room on a non-400 failure', async () => {
+      appointmentModel.findById.mockResolvedValue(buildAppointment());
+      rejectCreateWith({
+        status: 401,
+        data: { error: 'authentication-error' },
+      });
+
+      await expect(
+        service.getDoctorVideoToken(appointmentId.toString(), {
+          _id: doctorId,
+        }),
+      ).rejects.toThrow(InternalServerErrorException);
+
+      expect(mockApi.get).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('retries', () => {
+    /** Fails the first `failures` calls to `url`, then succeeds. */
+    const failThenSucceed = (url: string, failures: number, response: any) => {
+      let seen = 0;
+      mockApi.post.mockImplementation((called: string) => {
+        if (called === url && seen++ < failures) {
+          return Promise.reject(response);
+        }
+        if (called === '/rooms') {
+          return Promise.resolve({
+            data: {
+              name: `consultation-${appointmentId.toString()}`,
+              url: 'https://carelexa.daily.co/room',
+              config: { exp: Math.floor(Date.now() / 1000) + 3600 },
+            },
+          });
+        }
+        return Promise.resolve({ data: { token: 'daily-token' } });
+      });
+    };
+
+    beforeEach(() => {
+      appointmentModel.findById.mockResolvedValue(buildAppointment());
+    });
+
+    it('retries a rate-limited room creation and succeeds', async () => {
+      failThenSucceed('/rooms', 1, { response: { status: 429, headers: {} } });
+
+      const result = await service.getDoctorVideoToken(
+        appointmentId.toString(),
+        { _id: doctorId },
+      );
+
+      expect(result.token).toBe('daily-token');
+      expect(
+        mockApi.post.mock.calls.filter((c) => c[0] === '/rooms'),
+      ).toHaveLength(2);
+    });
+
+    it('retries a 5xx from the token endpoint', async () => {
+      failThenSucceed('/meeting-tokens', 1, { response: { status: 503 } });
+
+      await service.getDoctorVideoToken(appointmentId.toString(), {
+        _id: doctorId,
+      });
+
+      expect(
+        mockApi.post.mock.calls.filter((c) => c[0] === '/meeting-tokens'),
+      ).toHaveLength(2);
+    });
+
+    it('gives up after the attempt budget', async () => {
+      failThenSucceed('/rooms', 99, { response: { status: 500 } });
+
+      await expect(
+        service.getDoctorVideoToken(appointmentId.toString(), {
+          _id: doctorId,
+        }),
+      ).rejects.toThrow(InternalServerErrorException);
+
+      expect(
+        mockApi.post.mock.calls.filter((c) => c[0] === '/rooms'),
+      ).toHaveLength(3);
+    });
+
+    it('does not retry a deterministic 4xx', async () => {
+      failThenSucceed('/rooms', 99, {
+        response: { status: 403, data: { error: 'authentication-error' } },
+      });
+
+      await expect(
+        service.getDoctorVideoToken(appointmentId.toString(), {
+          _id: doctorId,
+        }),
+      ).rejects.toThrow(InternalServerErrorException);
+
+      expect(
+        mockApi.post.mock.calls.filter((c) => c[0] === '/rooms'),
+      ).toHaveLength(1);
+    });
+
+    // The attempt already burned the full 10s timeout; retrying would stall a doctor
+    // mid-appointment for 30s to reach the same answer.
+    it('does not retry a request that timed out', async () => {
+      failThenSucceed('/rooms', 99, { code: 'ECONNABORTED' });
+
+      await expect(
+        service.getDoctorVideoToken(appointmentId.toString(), {
+          _id: doctorId,
+        }),
+      ).rejects.toThrow(InternalServerErrorException);
+
+      expect(
+        mockApi.post.mock.calls.filter((c) => c[0] === '/rooms'),
+      ).toHaveLength(1);
+    });
+
+    it('retries a connection reset that carries no response', async () => {
+      failThenSucceed('/rooms', 1, { code: 'ECONNRESET' });
+
+      await service.getDoctorVideoToken(appointmentId.toString(), {
+        _id: doctorId,
+      });
+
+      expect(
+        mockApi.post.mock.calls.filter((c) => c[0] === '/rooms'),
+      ).toHaveLength(2);
+    });
+  });
+
+  describe('meeting token integrity', () => {
+    beforeEach(() => {
+      appointmentModel.findById.mockResolvedValue(
+        buildAppointment({
+          daily_room_name: 'consultation-x',
+          daily_room_url: 'https://carelexa.daily.co/consultation-x',
+        }),
+      );
+    });
+
+    it('refuses a 200 that carries no token instead of returning undefined', async () => {
+      mockApi.post.mockResolvedValue({ data: {} });
+
+      await expect(
+        service.getPatientVideoToken(appointmentId.toString(), {
+          _id: patientId,
+        }),
+      ).rejects.toThrow(/Failed to generate video token/);
+    });
+
+    it('translates a token endpoint failure into a 500', async () => {
+      mockApi.post.mockRejectedValue({
+        response: { status: 400, data: { error: 'invalid-request-error' } },
+      });
+
+      await expect(
+        service.getPatientVideoToken(appointmentId.toString(), {
+          _id: patientId,
+        }),
+      ).rejects.toThrow(InternalServerErrorException);
     });
   });
 });

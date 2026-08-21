@@ -86,6 +86,10 @@ export class VideoController extends CoreController {
     status: 403,
     description: 'Forbidden — appointment does not belong to this doctor',
   })
+  @ApiResponse({
+    status: 503,
+    description: 'Video calling is not configured on this deployment',
+  })
   async getDoctorToken(
     @Param('id') id: string,
     @Req() req: Request,
@@ -133,6 +137,10 @@ export class VideoController extends CoreController {
     status: 403,
     description: 'Forbidden — appointment does not belong to this patient',
   })
+  @ApiResponse({
+    status: 503,
+    description: 'Video calling is not configured on this deployment',
+  })
   async getPatientToken(
     @Param('id') id: string,
     @Req() req: Request,
@@ -170,6 +178,11 @@ export class VideoController extends CoreController {
   @ApiResponse({
     status: 403,
     description: 'Forbidden — appointment does not belong to this doctor',
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      'Consultation is already completed or canceled and cannot be reopened',
   })
   async startSession(
     @Param('id') id: string,
