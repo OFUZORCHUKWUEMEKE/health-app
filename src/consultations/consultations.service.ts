@@ -26,6 +26,7 @@ import {
   ConsultationForEnum,
   ConsultationStatusEnum,
   ConsultationTypeEnum,
+  ReferralSpecialtyEnum,
 } from './consultations.enums';
 import { MedicationRepository } from './medication.repository';
 import { ReferralRepository } from './referral.repository';
@@ -1273,7 +1274,11 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
 
     const created = await this.referralRepository.create({
       specialist_name: payload.specialist_name,
+      specialty: payload.specialty ?? null,
       hospital: payload.hospital,
+      hospital_address: payload.hospital_address ?? [],
+      attachment_investigation_ids:
+        payload.attachment_investigation_ids ?? [],
       referral_details: payload.referral_details,
       referred_doctor_name: payload.referred_doctor_name?.trim() || null,
       assign_to_patient: assignToPatient,
@@ -1355,6 +1360,9 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
     }
     const updatePayload: UpdateReferralDto & {
       referred_doctor_name?: string | null;
+      specialty?: ReferralSpecialtyEnum | null;
+      hospital_address?: string[];
+      attachment_investigation_ids?: string[];
       assign_to_patient?: boolean;
       user_id?: Types.ObjectId | null;
     } = { ...payload };
@@ -1363,6 +1371,14 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
       updatePayload.referred_doctor_name =
         payload.referred_doctor_name?.trim() || null;
     }
+
+    // Optional-now fields must be clearable, not just settable: an explicit
+    // value is written, undefined means "leave unchanged".
+    if (payload.specialty === undefined) delete updatePayload.specialty;
+    if (payload.hospital_address === undefined)
+      delete updatePayload.hospital_address;
+    if (payload.attachment_investigation_ids === undefined)
+      delete updatePayload.attachment_investigation_ids;
 
     if (payload.assign_to_patient !== undefined) {
       updatePayload.assign_to_patient = payload.assign_to_patient;

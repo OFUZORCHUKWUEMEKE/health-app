@@ -11,6 +11,7 @@ import {
   MedicationInterval,
   MedicationDurationUnit,
   STATUS,
+  ReferralSpecialtyEnum,
 } from './consultations.enums';
 
 export type ConsultationDocument = Consultation & Document;
@@ -519,8 +520,17 @@ export class Referral extends Document {
   @Prop({ required: true })
   specialist_name: string;
 
+  @Prop({ type: String, enum: ReferralSpecialtyEnum, default: null })
+  specialty: ReferralSpecialtyEnum | null;
+
   @Prop({ required: true })
   hospital: string;
+
+  @Prop({ type: [String], default: [] })
+  hospital_address: string[];
+
+  @Prop({ type: [String], default: [] })
+  attachment_investigation_ids: string[];
 
   @Prop({ required: true })
   referral_details: string;
