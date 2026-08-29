@@ -2243,6 +2243,24 @@ export class BookingsService implements OnModuleInit {
             return {};
         }
 
+        // The `days_ahead` calling convention is capped at 60 by the DTO's own
+        // @Min/@Max, but the explicit startDate/endDate convention had no equivalent —
+        // a client could request a multi-year window and force this method to build a
+        // Map/Set per slot per doctor per day for the whole span in one request, all
+        // in memory, synchronously. That is a directly client-triggerable unbounded
+        // allocation on an endpoint open to every authenticated role. Cap both
+        // conventions the same way; nothing in this method's own doc comment or the
+        // frontend contract (docs/booking-availability-frontend-algorithm.md) describes
+        // a legitimate need for more than a few weeks in a single call.
+        const MAX_AVAILABILITY_MATRIX_DAYS = 60;
+        if (dates.length > MAX_AVAILABILITY_MATRIX_DAYS) {
+            throw new BadRequestException(
+                `Date range too large: requested ${dates.length} days, maximum is ${MAX_AVAILABILITY_MATRIX_DAYS}.`,
+            );
+        }
+
+        const memBefore = process.memoryUsage();
+
         // ── 3. Fetch all doctor availabilities ───────────────────────────────
         const availabilities = await this.doctorAvailabilityRepository
             .model()
@@ -2482,6 +2500,20 @@ export class BookingsService implements OnModuleInit {
                 daysResult[dateStr] = { slots: slotData };
             }
         }
+
+        // Deliberately scoped to this one method rather than global request logging —
+        // this is the only handler in the app whose cost scales with (days x doctors x
+        // slots) instead of one entity's own data, so it is the one worth watching per
+        // call while confirming the range cap above actually holds in production.
+        const memAfter = process.memoryUsage();
+        this.logger.log(
+            `getSystemAvailabilityMatrix: ${dates.length} day(s), ` +
+            `${activeAvails.length} doctor(s), heapUsed delta ${(
+                (memAfter.heapUsed - memBefore.heapUsed) /
+                1024 /
+                1024
+            ).toFixed(1)}MB, rss ${(memAfter.rss / 1024 / 1024).toFixed(0)}MB`,
+        );
 
         return daysResult;
     }
