@@ -1,5 +1,6 @@
 import { Types } from 'mongoose';
 import { DateTime } from 'luxon';
+import { BadRequestException } from '@nestjs/common';
 import { AppointmentFor, AppointmentStatus, Role } from 'src/common/enums';
 import { BookingsService } from './bookings.service';
 
@@ -602,6 +603,39 @@ describe('BookingsService', () => {
                     select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }),
                 }),
             });
+        });
+
+        // GET booking/slots/availability is reachable by every authenticated role
+        // (RolesGuard + @Roles(ADMIN, DOCTOR, PATIENT)) and, unlike the days_ahead
+        // convention, the explicit startDate/endDate convention had no span limit — a
+        // multi-year window would build a Map/Set per slot per doctor per day for the
+        // whole span in one request. This is the guard added to close that.
+        it('rejects an explicit date range wider than 60 days before touching the database', async () => {
+            await expect(
+                service.getSystemAvailabilityMatrix({
+                    startDate: '2026-01-01',
+                    endDate: '2026-12-31',
+                    timezone: 'UTC',
+                } as any),
+            ).rejects.toThrow(BadRequestException);
+
+            expect(doctorAvailabilityRepository.model).not.toHaveBeenCalled();
+        });
+
+        it('allows a range of exactly 60 days', async () => {
+            doctorAvailabilityRepository.model.mockReturnValue({
+                find: jest.fn().mockReturnValue({
+                    lean: jest.fn().mockResolvedValue([]),
+                }),
+            });
+
+            const result = await service.getSystemAvailabilityMatrix({
+                startDate: '2026-06-01',
+                endDate: '2026-07-30', // inclusive — exactly 60 days
+                timezone: 'UTC',
+            } as any);
+
+            expect(result).toEqual({});
         });
 
         it('returns empty days when no doctors have availability', async () => {
