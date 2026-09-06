@@ -43,6 +43,19 @@ import { NotificationsModule } from './notifications/notifications.module';
         return {
           uri,
           retryAttempts: 3,
+          // The driver's default maxPoolSize is 100. On a 512 MB instance that is a
+          // standing native-memory cost (socket buffers plus TLS state per connection)
+          // for concurrency this app never reaches — it is one process serving a
+          // modest request rate, not a fan-out worker. 10 sockets is ample and keeps
+          // the pool from competing with the heap for the container's RAM.
+          //
+          // Raise DB_MAX_POOL_SIZE if request latency starts showing queueing on the
+          // pool rather than in Mongo itself.
+          maxPoolSize: Number(process.env.DB_MAX_POOL_SIZE) || 10,
+          // Let idle sockets close. Holding a warm floor buys a little latency on the
+          // first request after a quiet period and costs memory the whole time.
+          minPoolSize: 0,
+          maxIdleTimeMS: 60_000,
           connectionFactory: (connection) => {
             connection.plugin(leanVirtuals);
             logIndexBuildFailures(connection);

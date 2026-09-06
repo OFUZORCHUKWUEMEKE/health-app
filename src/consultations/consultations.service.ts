@@ -3,6 +3,7 @@ import {
   ConflictException,
   ConsoleLogger,
   Injectable,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -76,9 +77,20 @@ import {
   UpdateInvestigationListDto,
 } from './dto/create-investigation-list.dto';
 import { CloudinaryService } from 'src/cloudinary/cloudinary.service';
+import { clampPage, clampPerPage } from 'src/common/utils/pagination.util';
+
+/**
+ * Row count above which the unpaginated /all routes log a warning. Not a cap — see
+ * getAllDoctorConsultation for why truncation is the wrong answer here. Chosen so the
+ * warning fires while the response is still comfortably servable (~2.3 KB/row lean),
+ * leaving room to move the caller to the paginated route before it is urgent.
+ */
+const UNPAGINATED_CONSULTATION_WARN_THRESHOLD = 1000;
 
 @Injectable()
 export class ConsultationsService extends CoreService<ConsultationRepository> {
+  private readonly logger = new Logger(ConsultationsService.name);
+
   constructor(
     private readonly consultationRepository: ConsultationRepository,
     private readonly consultationFactory: ConsultationFactory,
@@ -427,6 +439,8 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
   ) {
     // console.log(patients_id)
     const { page, perPage } = query;
+    const safePage = clampPage(page);
+    const safePerPage = clampPerPage(perPage);
     const total = await this.consultationRepository
       .model()
       .countDocuments({ user_id: patients_id });
@@ -444,20 +458,21 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
           'appointment_number scheduled_start_at_utc scheduled_end_at_utc status reason_for_visit timezone_snapshot',
       })
       .sort({ createdAt: -1 })
-      .skip(((+page || 1) - 1) * (+perPage || 10))
-      .limit(+perPage || 10);
+      .skip((safePage - 1) * safePerPage)
+      .limit(safePerPage);
     if (!consultation) throw new ConflictException('Invalid Consulation');
     return {
       consultation,
       meta: {
         total,
-        page: +page || 1,
-        lastPage: total === 0 ? 1 : Math.ceil(total / (+perPage || 10)),
+        page: safePage,
+        lastPage: total === 0 ? 1 : Math.ceil(total / safePerPage),
       },
     };
     // return consultation
   }
 
+  /** Unpaginated, same shape and same caveats as getAllDoctorConsultation. */
   async getAllPatientConsultation(patient_id: string) {
     return this.consultationRepository
       .model()
@@ -472,26 +487,29 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
         select:
           'appointment_number scheduled_start_at_utc scheduled_end_at_utc status reason_for_visit timezone_snapshot',
       })
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
   }
 
   async findDoctorInvestigation(doctor_id, query) {
     const { page, perPage } = query;
+    const safePage = clampPage(page);
+    const safePerPage = clampPerPage(perPage);
     const total = await this.investigationRepository
       .model()
       .countDocuments({ doctor_id });
     let investigation = await this.investigationRepository
       .model()
       .find({ doctor_id: doctor_id }, {}, { populate: 'consultation_id' })
-      .skip(((+page || 1) - 1) * (+perPage || 10))
-      .limit(+perPage || 10);
+      .skip((safePage - 1) * safePerPage)
+      .limit(safePerPage);
     if (!investigation) throw new ConflictException('Invalid User');
     return {
       investigation,
       meta: {
         total,
-        page: +page || 1,
-        lastPage: total === 0 ? 1 : Math.ceil(total / (+perPage || 10)),
+        page: safePage,
+        lastPage: total === 0 ? 1 : Math.ceil(total / safePerPage),
       },
     };
   }
@@ -507,6 +525,8 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
 
   async findPatientInvestigation(patients_id, query) {
     const { page, perPage } = query;
+    const safePage = clampPage(page);
+    const safePerPage = clampPerPage(perPage);
     const total = await this.investigationRepository
       .model()
       .countDocuments({ user_id: patients_id });
@@ -514,21 +534,23 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
       .model()
       .find({ user_id: patients_id }, {}, { populate: 'consultation_id' })
       .sort({ _id: -1 })
-      .skip(((+page || 1) - 1) * (+perPage || 10))
-      .limit(+perPage || 10);
+      .skip((safePage - 1) * safePerPage)
+      .limit(safePerPage);
     if (!investigation) throw new ConflictException('Invalid User');
     return {
       investigation,
       meta: {
         total,
-        page: +page || 1,
-        lastPage: total === 0 ? 1 : Math.ceil(total / (+perPage || 10)),
+        page: safePage,
+        lastPage: total === 0 ? 1 : Math.ceil(total / safePerPage),
       },
     };
   }
 
   async findPatientDiagnosis(patients_id, query) {
     const { page, perPage } = query;
+    const safePage = clampPage(page);
+    const safePerPage = clampPerPage(perPage);
     const total = await this.diagnosisRepository
       .model()
       .countDocuments({ user_id: patients_id });
@@ -536,21 +558,23 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
       .model()
       .find({ user_id: patients_id }, {}, { populate: 'consultation_id' })
       .sort({ _id: -1 })
-      .skip(((+page || 1) - 1) * (+perPage || 10))
-      .limit(+perPage || 10);
+      .skip((safePage - 1) * safePerPage)
+      .limit(safePerPage);
     if (!diagnosis) throw new ConflictException('Invalid User');
     return {
       diagnosis,
       meta: {
         total,
-        page: +page || 1,
-        lastPage: total === 0 ? 1 : Math.ceil(total / (+perPage || 10)),
+        page: safePage,
+        lastPage: total === 0 ? 1 : Math.ceil(total / safePerPage),
       },
     };
   }
 
   async findDoctorConsultation(doctor_id, query) {
     const { page, perPage } = query;
+    const safePage = clampPage(page);
+    const safePerPage = clampPerPage(perPage);
     const total = await this.consultationRepository
       .model()
       .countDocuments({ doctor_id });
@@ -573,21 +597,38 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
           'first_name last_name full_name email phone_number specializations profile_picture_url',
       })
       .sort({ createdAt: -1 })
-      .skip(((+page || 1) - 1) * (+perPage || 10))
-      .limit(+perPage || 10);
+      .skip((safePage - 1) * safePerPage)
+      .limit(safePerPage);
     if (!consultation) throw new ConflictException('Invalid Consulation');
     return {
       consultation,
       meta: {
         total,
-        page: +page || 1,
-        lastPage: total === 0 ? 1 : Math.ceil(total / (+perPage || 10)),
+        page: safePage,
+        lastPage: total === 0 ? 1 : Math.ceil(total / safePerPage),
       },
     };
   }
 
+  /**
+   * Deliberately unpaginated — GET /doctors/consultations/all is documented that way and
+   * the paginated sibling is findDoctorConsultation(). Two things keep it from being the
+   * memory hazard it was:
+   *
+   * .lean() — nothing downstream calls a document method on these; they are serialised
+   * straight into the response. A hydrated Consultation with its three populated
+   * sub-documents measures ~12.3 KB against ~2.3 KB for the plain object, so hydration
+   * alone was costing ~60 MB for a doctor with 5,000 consultations, before Express
+   * allocated the serialised copy on top of it. Safe here: neither Consultation nor the
+   * populated schemas declare virtuals or a toJSON transform, so the payload is unchanged.
+   *
+   * The warning below — the route is still O(clinical history). It is bounded today only
+   * by how long the practice has been running, so this logs before it becomes fatal
+   * rather than after. If it starts firing, this route needs pagination; truncating it
+   * silently would be worse than the memory it saves.
+   */
   async getAllDoctorConsultation(doctor_id: string) {
-    return this.consultationRepository
+    const consultations = await this.consultationRepository
       .model()
       .find({ doctor_id })
       .populate({
@@ -605,7 +646,18 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
         select:
           'first_name last_name full_name email phone_number specializations profile_picture_url',
       })
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (consultations.length > UNPAGINATED_CONSULTATION_WARN_THRESHOLD) {
+      this.logger.warn(
+        `getAllDoctorConsultation returned ${consultations.length} rows for doctor ${doctor_id} ` +
+        `(threshold ${UNPAGINATED_CONSULTATION_WARN_THRESHOLD}). This route is unpaginated; ` +
+        `move the caller to GET /doctors/consultations before this grows further.`,
+      );
+    }
+
+    return consultations;
   }
 
   async findByUser(user_id: string): Promise<Consultation[]> {
@@ -693,6 +745,8 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
 
   async findDoctorConsultationInvestigation(doctor_id, consultation_id, query) {
     const { page, perPage } = query;
+    const safePage = clampPage(page);
+    const safePerPage = clampPerPage(perPage);
     const total = await this.investigationRepository
       .model()
       .countDocuments({ doctor_id, consultation_id });
@@ -700,15 +754,15 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
       .model()
       .find({ doctor_id, consultation_id })
       .sort({ _id: -1 })
-      .skip(((+page || 1) - 1) * (+perPage || 10))
-      .limit(+perPage || 10);
+      .skip((safePage - 1) * safePerPage)
+      .limit(safePerPage);
     if (!data) throw new BadRequestException('Invalid Credentials');
     return {
       data,
       meta: {
         total,
-        page: +page || 1,
-        lastPage: total === 0 ? 1 : Math.ceil(total / (+perPage || 10)),
+        page: safePage,
+        lastPage: total === 0 ? 1 : Math.ceil(total / safePerPage),
       },
     };
   }
@@ -1462,8 +1516,10 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
     query: { page?: number | string; perPage?: number | string },
   ) {
     const { page, perPage } = query;
-    const currentPage = +page || 1;
-    const limit = +perPage || 10;
+    const safePage = clampPage(page);
+    const safePerPage = clampPerPage(perPage);
+    const currentPage = safePage;
+    const limit = safePerPage;
 
     const filter = this.buildPatientReferralFilter(patient_id);
     const total = await this.referralRepository.model().countDocuments(filter);
@@ -1747,6 +1803,8 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
     query: CoreSearchFilterDatePaginationDto,
   ) {
     const { page, perPage } = query;
+    const safePage = clampPage(page);
+    const safePerPage = clampPerPage(perPage);
     const total = await this.physicalExam
       .model()
       .countDocuments({ user_id: patients_id });
@@ -1758,15 +1816,15 @@ export class ConsultationsService extends CoreService<ConsultationRepository> {
         { populate: 'consultation_id' },
       )
       .sort({ _id: -1 })
-      .skip(((+page || 1) - 1) * (+perPage || 10))
-      .limit(+perPage || 10);
+      .skip((safePage - 1) * safePerPage)
+      .limit(safePerPage);
     if (!physical_exam) throw new ConflictException('Invalid User');
     return {
       physical_exam,
       meta: {
         total,
-        page: +page || 1,
-        lastPage: total === 0 ? 1 : Math.ceil(total / (+perPage || 10)),
+        page: safePage,
+        lastPage: total === 0 ? 1 : Math.ceil(total / safePerPage),
       },
     };
   }
