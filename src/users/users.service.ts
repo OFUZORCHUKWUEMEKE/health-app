@@ -12,6 +12,7 @@ import {
     InvestigationDocument,
     InvestigationListDocument,
 } from 'src/consultations/consultations.model';
+import { clampPage, clampPerPage } from 'src/common/utils/pagination.util';
 
 @Injectable()
 export class UsersService extends CoreService<UserRepository> {
@@ -230,7 +231,12 @@ export class UsersService extends CoreService<UserRepository> {
 
     async getPatientsWithSearch(q: string, page = 1, limit = 20, doctor_id?: string) {
         const query = (q || '').trim();
-        const skip = (page - 1) * limit;
+        // The controller takes `limit` straight off the query string. Clamp here too:
+        // this method is the one that turns a page size into documents in the heap, so
+        // it is the right place for the ceiling to be unconditional.
+        const safeLimit = clampPerPage(limit, 20);
+        const safePage = clampPage(page);
+        const skip = (safePage - 1) * safeLimit;
 
         let filter: Record<string, any> = {};
         if (query) {
@@ -258,45 +264,71 @@ export class UsersService extends CoreService<UserRepository> {
         }
 
         const [patients, total] = await Promise.all([
-            this.userRepository.model().find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+            // .lean() rather than hydrated documents: the only thing done with these is a
+            // spread into the response object, and a hydrated Mongoose document measures
+            // ~5x the heap of the plain object it wraps. Nothing here needs a document.
+            //
+            // This is output-equivalent to the `p.toObject()` it replaces: User declares
+            // no virtuals, and password_hash / refresh_token_hash are `select: false`, so
+            // they were never in the result set to begin with.
+            this.userRepository
+                .model()
+                .find(filter)
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(safeLimit)
+                .lean(),
             this.userRepository.model().countDocuments(filter),
         ]);
 
-        // Attach latest consultation_id to each patient
         const patientIds = patients.map((p) => p._id);
-        const [latestConsultations, doctorConsultationPatients] = await Promise.all([
-            this.consultationModel
-                .find({ user_id: { $in: patientIds } })
-                .sort({ createdAt: -1 })
-                .select('user_id _id')
-                .exec(),
-            doctor_id
-                ? this.consultationModel
-                    .find({
-                        user_id: { $in: patientIds },
-                        doctor_id: new Types.ObjectId(doctor_id),
-                    })
-                    .select('user_id')
-                    .exec()
+
+        // Attach latest consultation_id to each patient.
+        //
+        // This used to `find({ user_id: { $in: patientIds } })` with no limit and then
+        // throw away all but the newest row per patient in JS. That reads EVERY
+        // consultation ever recorded for the patients on this page — for a page of 20
+        // long-standing patients that is thousands of documents fetched to keep 20 ids,
+        // and it grows with clinical history rather than with page size. It was the
+        // single largest allocation on this route.
+        //
+        // $group with $first over a sorted stream does the same selection in the database
+        // and returns at most one row per patient, so the result set is bounded by the
+        // page size no matter how much history exists.
+        const [latestConsultations, doctorConsultationPatientIds] = await Promise.all([
+            patientIds.length
+                ? this.consultationModel.aggregate([
+                    { $match: { user_id: { $in: patientIds } } },
+                    { $sort: { user_id: 1, createdAt: -1 } },
+                    { $group: { _id: '$user_id', consultation_id: { $first: '$_id' } } },
+                ])
+                : Promise.resolve([]),
+            // distinct() returns the unique user_ids only — one value per patient rather
+            // than one document per consultation.
+            doctor_id && patientIds.length
+                ? this.consultationModel.distinct('user_id', {
+                    user_id: { $in: patientIds },
+                    doctor_id: new Types.ObjectId(doctor_id),
+                })
                 : Promise.resolve([]),
         ]);
 
-        // Keep only the most recent per patient
-        const latestByPatient = new Map<string, string>();
-        for (const c of latestConsultations) {
-            const uid = c.user_id.toString();
-            if (!latestByPatient.has(uid)) latestByPatient.set(uid, c._id.toString());
-        }
-
-        const doctorConsultationSet = new Set(
-            doctorConsultationPatients.map((c) => c.user_id.toString()),
+        const latestByPatient = new Map<string, string>(
+            latestConsultations.map((row: any) => [
+                String(row._id),
+                String(row.consultation_id),
+            ]),
         );
 
-        const patientsWithConsultation = patients.map((p) => ({
-            ...p.toObject(),
-            consultation_id: latestByPatient.get(p._id.toString()) ?? null,
+        const doctorConsultationSet = new Set(
+            (doctorConsultationPatientIds as any[]).map((id) => String(id)),
+        );
+
+        const patientsWithConsultation = patients.map((p: any) => ({
+            ...p,
+            consultation_id: latestByPatient.get(String(p._id)) ?? null,
             has_consultation_with_doctor: doctor_id
-                ? doctorConsultationSet.has(p._id.toString())
+                ? doctorConsultationSet.has(String(p._id))
                 : false,
         }));
 
@@ -304,9 +336,9 @@ export class UsersService extends CoreService<UserRepository> {
             patients: patientsWithConsultation,
             pagination: {
                 total,
-                page,
-                limit,
-                total_pages: Math.ceil(total / limit),
+                page: safePage,
+                limit: safeLimit,
+                total_pages: safeLimit > 0 ? Math.ceil(total / safeLimit) : 1,
             },
         };
     }
