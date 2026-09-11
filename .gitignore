@@ -7,6 +7,15 @@
 /dist
 /node_modules
 
+# Go (server-go/)
+*.exe
+*.out
+*.test
+/bin/
+coverage.out
+coverage.html
+/vendor/
+
 # Uploads
 /uploads
 

@@ -1,0 +1,5238 @@
+openapi: 3.0.3
+info:
+  title: Telemex Go API
+  version: 1.0.0
+  description: >
+    Telemedicine backend (Go + PostgreSQL). Every response —
+    success or error — uses the standard envelope
+    `{success, response_code, response_description, data, message,
+    request_id, path, timestamp}`. `response_code` is a numeric string:
+    `00` success, `006` validation, `009` forbidden,
+    `011` unauthenticated, `004` not found, `016` server error.
+    See `quirks.md` for preserved frontend-compat behaviors.
+servers:
+  - url: http://localhost:4000/api/v1
+tags:
+  - name: System
+    description: Health, version, readiness, spec
+  - name: Auth
+    description: Registration, login, tokens, password flows, Google OAuth
+  - name: Patients
+    description: Patient self-service profile
+  - name: Doctors
+    description: Doctor self-service profile + patient lookup
+  - name: Admin
+    description: Admin user management + metrics
+  - name: Booking
+    description: Availability, slots, appointments
+  - name: ConsultationsPatient
+    description: Patient consultation reads
+  - name: ConsultationsDoctor
+    description: Doctor consultation workspace + clinical writes
+  - name: Notifications
+    description: Feeds + reminder dispatch
+  - name: Video
+    description: Daily.co video rooms + tokens
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      tags: [System]
+      summary: Liveness
+      security: []
+      responses:
+        '200':
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [status]
+                        properties:
+                          status: { type: string, example: ok }
+  /version:
+    get:
+      tags: [System]
+      summary: Build metadata
+      security: []
+      responses:
+        '200':
+          description: Version info
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/VersionInfo' }
+  /readyz:
+    get:
+      tags: [System]
+      summary: Readiness (database + pool stats)
+      security: []
+      responses:
+        '200':
+          description: Ready
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Readiness' }
+        '503':
+          description: Database unconfigured or unreachable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /openapi.yaml:
+    get:
+      tags: [System]
+      summary: This OpenAPI document
+      security: []
+      responses:
+        '200':
+          description: YAML spec
+          content:
+            text/yaml:
+              schema: { type: string }
+  # ------------------------------------------------------------- Auth ----
+  /auth/patients/register/initiate:
+    post:
+      tags: [Auth]
+      summary: Start patient registration (OTP)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: OTP sent
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/OtpInitiated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /auth/patients/register/verify-otp:
+    post:
+      tags: [Auth]
+      summary: Verify registration OTP
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, otp]
+              properties:
+                email: { type: string, format: email }
+                otp: { type: string }
+      responses:
+        '200':
+          description: OTP verified
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/RegistrationToken' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /auth/patients/register/resend-otp:
+    post:
+      tags: [Auth]
+      summary: Resend registration OTP
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: OTP resent
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/OtpInitiated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /auth/patients/register/complete:
+    post:
+      tags: [Auth]
+      summary: Complete patient registration
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [registration_token, first_name, last_name, password]
+              properties:
+                registration_token: { type: string }
+                first_name: { type: string }
+                last_name: { type: string }
+                middle_name: { type: string }
+                phone_number: { type: string }
+                password: { type: string, minLength: 8 }
+      responses:
+        '201':
+          description: Patient created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PatientSession' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /auth/patients/signup:
+    post:
+      tags: [Auth]
+      summary: Single-step patient signup
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [first_name, last_name, email, password]
+              properties:
+                first_name: { type: string }
+                last_name: { type: string }
+                middle_name: { type: string }
+                email: { type: string, format: email }
+                phone_number: { type: string }
+                password: { type: string, minLength: 8 }
+      responses:
+        '201':
+          description: Patient created (unverified)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PatientSession' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /auth/patients/login:
+    post:
+      tags: [Auth]
+      summary: Patient login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PatientSession' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/doctors/login:
+    post:
+      tags: [Auth]
+      summary: Doctor login (inactive doctors rejected)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DoctorSession' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /auth/doctors/signup:
+    post:
+      tags: [Auth]
+      summary: Create doctor (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, first_name, last_name, password]
+              properties:
+                email: { type: string, format: email }
+                first_name: { type: string }
+                last_name: { type: string }
+                password: { type: string, minLength: 8 }
+                phone_number: { type: string }
+      responses:
+        '201':
+          description: Doctor created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DoctorSession' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /auth/admins/login:
+    post:
+      tags: [Auth]
+      summary: Admin login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminSession' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/admins/bootstrap:
+    post:
+      tags: [Auth]
+      summary: Bootstrap first admin (key-gated)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [first_name, last_name, email, password, bootstrap_key]
+              properties:
+                first_name: { type: string }
+                last_name: { type: string }
+                email: { type: string, format: email }
+                phone_number: { type: string }
+                password: { type: string, minLength: 8 }
+                role: { type: string, default: super_admin }
+                bootstrap_key: { type: string }
+      responses:
+        '201':
+          description: Admin created or updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/AdminSession'
+                          - type: object
+                            properties:
+                              mode: { type: string, enum: [created, updated] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate refresh token
+      security: []
+      description: >
+        Note the camelCase keys — unlike login which answers
+        `token`/`refresh_token`, refresh answers
+        `accessToken`/`refreshToken`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken, role]
+              properties:
+                refreshToken: { type: string }
+                role: { $ref: '#/components/schemas/Role' }
+      responses:
+        '200':
+          description: Tokens rotated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [accessToken, refreshToken]
+                        properties:
+                          accessToken: { type: string }
+                          refreshToken: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/change-password:
+    post:
+      tags: [Auth]
+      summary: Change own password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword, confirmNewPassword]
+              properties:
+                currentPassword: { type: string }
+                newPassword: { type: string, minLength: 8 }
+                confirmNewPassword: { type: string }
+      responses:
+        '200':
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [message]
+                        properties:
+                          message:
+                            {
+                              type: string,
+                              example: 'Password changed successfully',
+                            }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout (revoke refresh token)
+      responses:
+        '200':
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [message]
+                        properties:
+                          message:
+                            { type: string, example: 'Logged out successfully' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/forgot-password/initiate:
+    post:
+      tags: [Auth]
+      summary: Start password reset (anti-enumeration)
+      security: []
+      description: Unknown emails get a generic message with no OTP fields.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: Reset initiated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/OtpInitiated' }
+  /auth/forgot-password/verify-otp:
+    post:
+      tags: [Auth]
+      summary: Verify reset OTP
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, otp]
+              properties:
+                email: { type: string, format: email }
+                otp: { type: string }
+      responses:
+        '200':
+          description: OTP verified
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          message: { type: string }
+                          reset_token: { type: string }
+                          reset_redirect_url: { type: string }
+                          expires_in: { type: string, example: 15m }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /auth/forgot-password/reset:
+    post:
+      tags: [Auth]
+      summary: Reset password with token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reset_token, password, confirm_password]
+              properties:
+                reset_token: { type: string }
+                password: { type: string, minLength: 8 }
+                confirm_password: { type: string }
+      responses:
+        '200':
+          description: Password reset
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [message]
+                        properties:
+                          message:
+                            {
+                              type: string,
+                              example: 'Password reset successfully',
+                            }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /auth/google:
+    get:
+      tags: [Auth]
+      summary: Start Google OAuth (redirect)
+      security: []
+      responses:
+        '302': { description: Redirect to Google }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /auth/google/callback:
+    get:
+      tags: [Auth]
+      summary: Google OAuth callback (redirects to frontend)
+      security: []
+      parameters:
+        - in: query
+          name: code
+          schema: { type: string }
+      responses:
+        '302': { description: Redirect to frontend with tokens }
+  # -------------------------------------------------------- Patients ----
+  /patients/me:
+    get:
+      tags: [Patients]
+      summary: Patient summary
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Summary
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PatientSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      tags: [Patients]
+      summary: Update patient profile (JSON or multipart)
+      security: [bearerAuth: []]
+      description: Allowlist keys only; unknown keys 400. Scalars blank leave untouched; arrays replace.
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PatientPatch' }
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                first_name: { type: string }
+                last_name: { type: string }
+                allergies:
+                  { type: string, description: 'JSON array string; "" clears' }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PatientProfile' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /patients/me/profile:
+    get:
+      tags: [Patients]
+      summary: Full patient profile
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PatientProfile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      tags: [Patients]
+      summary: Update patient profile (alias)
+      security: [bearerAuth: []]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PatientPatch' }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PatientProfile' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /patients/me/metrics:
+    get:
+      tags: [Patients]
+      summary: Patient counts (consultations, medications, investigations, appointments)
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Metrics
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PatientMetrics' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /patients/me/timezone:
+    patch:
+      tags: [Patients]
+      summary: Set patient timezone
+      security: [bearerAuth: []]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [timezone]
+              properties:
+                timezone: { type: string, example: Africa/Lagos }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PatientProfile' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /patients/me/profile-picture:
+    patch:
+      tags: [Patients]
+      summary: Set profile picture URL
+      security: [bearerAuth: []]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profile_picture_url]
+              properties:
+                profile_picture_url: { type: string }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PatientProfile' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /patients/me/profile-picture/upload:
+    post:
+      tags: [Patients]
+      summary: Upload profile picture (5MB max)
+      security: [bearerAuth: []]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                image: { type: string, format: binary }
+                profile_picture: { type: string, format: binary }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PatientProfile' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMedia' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  # --------------------------------------------------------- Doctors ----
+  /doctors/me:
+    get:
+      tags: [Doctors]
+      summary: Doctor summary
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Summary
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DoctorSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      tags: [Doctors]
+      summary: Update doctor profile
+      security: [bearerAuth: []]
+      description: 6 keys only (first_name, last_name, phone_number, profile_picture_url, license_no, specializations).
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DoctorPatch' }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DoctorProfile' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /doctors/me/profile:
+    get:
+      tags: [Doctors]
+      summary: Full doctor profile
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DoctorProfile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      tags: [Doctors]
+      summary: Update doctor profile (alias)
+      security: [bearerAuth: []]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DoctorPatch' }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DoctorProfile' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /doctors/me/metrics:
+    get:
+      tags: [Doctors]
+      summary: Doctor counts (open consults, unsent meds/lists, upcoming appointments)
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Metrics
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DoctorMetrics' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /doctors/me/timezone:
+    patch:
+      tags: [Doctors]
+      summary: Set doctor timezone
+      security: [bearerAuth: []]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [timezone]
+              properties:
+                timezone: { type: string, example: Africa/Lagos }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DoctorProfile' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /doctors/me/profile-picture:
+    patch:
+      tags: [Doctors]
+      summary: Set profile picture URL
+      security: [bearerAuth: []]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profile_picture_url]
+              properties:
+                profile_picture_url: { type: string }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DoctorProfile' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /doctors/me/profile-picture/upload:
+    post:
+      tags: [Doctors]
+      summary: Upload profile picture (5MB max)
+      security: [bearerAuth: []]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                image: { type: string, format: binary }
+                profile_picture: { type: string, format: binary }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DoctorProfile' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMedia' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /doctors/patients:
+    get:
+      tags: [Doctors]
+      summary: Doctor's patients (search + pagination)
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/QueryQ'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Patient list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          patients:
+                            type: array
+                            items:
+                              { $ref: '#/components/schemas/DoctorPatientRow' }
+                          pagination:
+                            { $ref: '#/components/schemas/Pagination' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /doctors/{id}/activate:
+    patch:
+      tags: [Doctors]
+      summary: Activate doctor (admin)
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Activated profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DoctorProfile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/{id}/deactivate:
+    patch:
+      tags: [Doctors]
+      summary: Deactivate doctor (admin, revokes sessions)
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Deactivated profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DoctorProfile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  # ----------------------------------------------------------- Admin ----
+  /admin/doctors:
+    post:
+      tags: [Admin]
+      summary: Create doctor (admin)
+      security: [bearerAuth: []]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, first_name, last_name, password]
+              properties:
+                email: { type: string, format: email }
+                first_name: { type: string }
+                last_name: { type: string }
+                password: { type: string }
+                phone_number: { type: string }
+      responses:
+        '201':
+          description: Doctor created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DoctorProfile' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [Admin]
+      summary: List doctors (admin)
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Doctor list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          doctors:
+                            type: array
+                            items:
+                              { $ref: '#/components/schemas/DoctorProfile' }
+                          pagination:
+                            { $ref: '#/components/schemas/Pagination' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/patients:
+    get:
+      tags: [Admin]
+      summary: List patients (admin)
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/QueryQ'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Patient list (dual pagination + meta shapes)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          patients:
+                            type: array
+                            items:
+                              { $ref: '#/components/schemas/PatientProfile' }
+                          pagination:
+                            { $ref: '#/components/schemas/Pagination' }
+                          meta:
+                            type: object
+                            properties:
+                              page: { type: integer }
+                              perPage: { type: integer }
+                              total: { type: integer }
+                              lastPage: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/patients/{id}:
+    get:
+      tags: [Admin]
+      summary: Patient detail (admin)
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Patient profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PatientProfile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/metrics:
+    get:
+      tags: [Admin]
+      summary: Global tiles (consultations, medications, investigations, appointments)
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Metrics
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          consultations: { $ref: '#/components/schemas/Metric' }
+                          medications: { $ref: '#/components/schemas/Metric' }
+                          investigations:
+                            { $ref: '#/components/schemas/Metric' }
+                          appointments: { $ref: '#/components/schemas/Metric' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  # --------------------------------------------------------- Booking ----
+  /booking/doctors/search:
+    get:
+      tags: [Booking]
+      summary: Search doctors
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/QueryQ'
+        - name: specialization
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Doctor array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/DoctorSearchRow' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /booking/doctors/available:
+    get:
+      tags: [Booking]
+      summary: Search available doctors
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/QueryQ'
+        - name: specialization
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Doctor array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/DoctorSearchRow' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /booking/doctors/find-optimal:
+    get:
+      tags: [Booking]
+      summary: Find optimal doctor + slot
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/DateTimeLocal'
+        - $ref: '#/components/parameters/Timezone'
+        - $ref: '#/components/parameters/Duration'
+        - name: specialization
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Match result
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/OptimalMatch' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /booking/doctors/{doctorId}/check-availability:
+    get:
+      tags: [Booking]
+      summary: Check a doctor slot
+      security: [bearerAuth: []]
+      parameters:
+        - name: doctorId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/DateTimeLocal'
+        - $ref: '#/components/parameters/Timezone'
+        - $ref: '#/components/parameters/Duration'
+      responses:
+        '200':
+          description: Availability verdict
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/SlotCheck' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /booking/doctors/{doctorId}/slots:
+    get:
+      tags: [Booking]
+      summary: Day slots for a doctor
+      security: [bearerAuth: []]
+      parameters:
+        - name: doctorId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: date
+          in: query
+          required: true
+          schema: { type: string, example: '2026-09-12' }
+      responses:
+        '200':
+          description: Slot list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DaySlots' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /booking/patients/appointments:
+    post:
+      tags: [Booking]
+      summary: Book appointment (manual)
+      security: [bearerAuth: []]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BookRequest' }
+      responses:
+        '201':
+          description: Booked
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Appointment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [Booking]
+      summary: Patient appointments (paginated)
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/StatusQuery'
+        - $ref: '#/components/parameters/FromQuery'
+        - $ref: '#/components/parameters/ToQuery'
+        - $ref: '#/components/parameters/QueryQ'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+      responses:
+        '200':
+          description: Appointment page
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AppointmentPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /booking/patients/appointments/auto-book:
+    post:
+      tags: [Booking]
+      summary: Auto-match booking with fallback
+      security: [bearerAuth: []]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BookRequest' }
+      responses:
+        '201':
+          description: Booked (possibly fallback)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AutoBookResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /booking/patients/appointments/approved:
+    get:
+      tags: [Booking]
+      summary: Confirmed appointments grouped by ISO week
+      security: [bearerAuth: []]
+      parameters:
+        - name: weekly
+          in: query
+          schema: { type: string }
+        - name: year
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Week groups
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/WeekGroups' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /booking/patients/appointments/all:
+    get:
+      tags: [Booking]
+      summary: All patient appointments (unpaginated, cap 10k)
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Appointment array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Appointment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /booking/patients/appointments/number/{appointmentNumber}:
+    get:
+      tags: [Booking]
+      summary: Appointment by number
+      security: [bearerAuth: []]
+      parameters:
+        - name: appointmentNumber
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Appointment detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AppointmentDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /booking/patients/appointments/{id}:
+    get:
+      tags: [Booking]
+      summary: Patient appointment detail
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Appointment detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AppointmentDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /booking/patients/appointments/{id}/cancel:
+    patch:
+      tags: [Booking]
+      summary: Patient cancels appointment
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /booking/patients/appointments/{id}/reschedule:
+    patch:
+      tags: [Booking]
+      summary: Patient reschedules (new appointment row)
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RescheduleRequest' }
+      responses:
+        '200':
+          description: Rescheduled
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/RescheduleResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /booking/patients/schedule:
+    get:
+      tags: [Booking]
+      summary: Patient schedule (optional week filter)
+      security: [bearerAuth: []]
+      parameters:
+        - name: weekly
+          in: query
+          schema: { type: string }
+        - name: year
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Schedule
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PatientSchedule' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /booking/slots/availability:
+    get:
+      tags: [Booking]
+      summary: System availability matrix (all roles)
+      security: [bearerAuth: []]
+      parameters:
+        - name: startDate
+          in: query
+          schema: { type: string }
+        - name: endDate
+          in: query
+          schema: { type: string }
+        - name: from
+          in: query
+          schema: { type: string }
+        - name: to
+          in: query
+          schema: { type: string }
+        - name: days_ahead
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 60 }
+        - $ref: '#/components/parameters/Timezone'
+      responses:
+        '200':
+          description: Date-keyed 15-minute grid
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AvailabilityMatrix' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /booking/appointments/{id}/confirm:
+    patch:
+      tags: [Booking]
+      summary: Doctor confirms appointment
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Confirmed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /booking/appointments/{id}/cancel:
+    patch:
+      tags: [Booking]
+      summary: Doctor cancels appointment
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /booking/appointments/{id}/complete:
+    patch:
+      tags: [Booking]
+      summary: Doctor completes appointment
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Completed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /booking/appointments/{id}/no-show:
+    patch:
+      tags: [Booking]
+      summary: Doctor marks no-show
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Marked no-show
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /booking/doctors/me/availability:
+    put:
+      tags: [Booking]
+      summary: Upsert weekly availability
+      security: [bearerAuth: []]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AvailabilityUpsert' }
+      responses:
+        '200':
+          description: Availability saved
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Availability' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    get:
+      tags: [Booking]
+      summary: Get own availability
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Availability
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Availability' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /booking/doctors/me/blackouts:
+    post:
+      tags: [Booking]
+      summary: Create blackouts
+      security: [bearerAuth: []]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [blackouts]
+              properties:
+                blackouts:
+                  type: array
+                  items: { $ref: '#/components/schemas/BlackoutInput' }
+      responses:
+        '201':
+          description: Blackouts created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Blackout' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    get:
+      tags: [Booking]
+      summary: List blackouts
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Blackout array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Blackout' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /booking/doctors/me/blackouts/{id}:
+    delete:
+      tags: [Booking]
+      summary: Delete blackout
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /booking/doctors/me/schedule:
+    get:
+      tags: [Booking]
+      summary: Doctor schedule (+blackouts, optional week)
+      security: [bearerAuth: []]
+      parameters:
+        - name: weekly
+          in: query
+          schema: { type: string }
+        - name: year
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Schedule
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DoctorSchedule' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /booking/doctors/me/appointments:
+    get:
+      tags: [Booking]
+      summary: Doctor appointments (paginated, excludes RESCHEDULED/COMPLETED by default)
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/StatusQuery'
+        - $ref: '#/components/parameters/FromQuery'
+        - $ref: '#/components/parameters/ToQuery'
+        - $ref: '#/components/parameters/QueryQ'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+      responses:
+        '200':
+          description: Appointment page
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AppointmentPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /booking/doctors/me/appointments/approved:
+    get:
+      tags: [Booking]
+      summary: Doctor confirmed appointments by ISO week
+      security: [bearerAuth: []]
+      parameters:
+        - name: weekly
+          in: query
+          schema: { type: string }
+        - name: year
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Week groups
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/WeekGroups' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /booking/doctors/me/appointments/all:
+    get:
+      tags: [Booking]
+      summary: All doctor appointments (unpaginated, cap 10k)
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Appointment array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Appointment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /booking/doctors/me/appointments/number/{appointmentNumber}:
+    get:
+      tags: [Booking]
+      summary: Doctor appointment by number
+      security: [bearerAuth: []]
+      parameters:
+        - name: appointmentNumber
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Appointment detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AppointmentDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /booking/doctors/me/appointments/{id}:
+    get:
+      tags: [Booking]
+      summary: Doctor appointment detail
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Appointment detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AppointmentDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /booking/doctors/me/patients:
+    get:
+      tags: [Booking]
+      summary: Doctor's patient roster
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/QueryQ'
+      responses:
+        '200':
+          description: Patient roster
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            _id: { type: string }
+                            first_name: { type: string }
+                            last_name: { type: string }
+                            email: { type: string }
+                            registration_no: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /booking/doctors/me/availability/test-24-7:
+    post:
+      tags: [Booking]
+      summary: Set 24/7 test availability (dev fixture)
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/Timezone'
+      responses:
+        '200':
+          description: Availability saved
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Availability' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /booking/doctors/me/appointments/{id}/accept:
+    get:
+      tags: [Booking]
+      summary: Confirm appointment (GET alias)
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Confirmed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Booking]
+      summary: Confirm appointment
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Confirmed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /booking/doctors/me/appointments/{id}/cancel:
+    patch:
+      tags: [Booking]
+      summary: Doctor cancels appointment
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /booking/doctors/me/appointments/{id}/reschedule:
+    patch:
+      tags: [Booking]
+      summary: Doctor reschedules (new appointment row)
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RescheduleRequest' }
+      responses:
+        '200':
+          description: Rescheduled
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/RescheduleResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  # --------------------------------------- Consultations (patient) ----
+  /patients/consultations:
+    get:
+      tags: [ConsultationsPatient]
+      summary: Patient consultation list
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+      responses:
+        '200':
+          description: Consultation page
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ConsultationPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /patients/consultations/all:
+    get:
+      tags: [ConsultationsPatient]
+      summary: All patient consultations (array)
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Consultation array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          { $ref: '#/components/schemas/ConsultationPatient' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /patients/consultations/consultation/weekly:
+    get:
+      tags: [ConsultationsPatient]
+      summary: Trailing-7-day consultations
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Consultation array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          { $ref: '#/components/schemas/ConsultationPatient' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /patients/consultations/medications:
+    get:
+      tags: [ConsultationsPatient]
+      summary: Patient medications (limit/offset, optional query)
+      security: [bearerAuth: []]
+      parameters:
+        - name: query
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Page'
+      responses:
+        '200':
+          description: Medication array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Medication' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /patients/consultations/medications/active:
+    get:
+      tags: [ConsultationsPatient]
+      summary: Active patient medications
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Medication array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Medication' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /patients/consultations/medications/grouped-by-consultation:
+    get:
+      tags: [ConsultationsPatient]
+      summary: Medications grouped by consultation
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+      responses:
+        '200':
+          description: Grouped medications
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MedicationGroups' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /patients/consultations/medications/{id}:
+    get:
+      tags: [ConsultationsPatient]
+      summary: One patient medication
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Medication
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Medication' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /patients/consultations/medication/{consultation_id}:
+    get:
+      tags: [ConsultationsPatient]
+      summary: Medications for one consultation
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Medication array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Medication' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /patients/consultations/investigations/grouped:
+    get:
+      tags: [ConsultationsPatient]
+      summary: Assigned investigations grouped by consultation
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+      responses:
+        '200':
+          description: Grouped investigations
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/InvestigationGroups' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /patients/consultations/referrals:
+    get:
+      tags: [ConsultationsPatient]
+      summary: Patient referrals (limit/offset)
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Page'
+      responses:
+        '200':
+          description: Referral array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Referral' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /patients/consultations/referrals/grouped:
+    get:
+      tags: [ConsultationsPatient]
+      summary: Patient referrals grouped by consultation
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Grouped referrals
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/ReferralGroup' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /patients/consultations/referrals/{referral_id}:
+    get:
+      tags: [ConsultationsPatient]
+      summary: One patient referral
+      security: [bearerAuth: []]
+      parameters:
+        - name: referral_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Referral
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Referral' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /patients/consultations/{consultation_id}/medications/grouped:
+    get:
+      tags: [ConsultationsPatient]
+      summary: One consultation's medications by formulary
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Formulary groups
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/FormularyGroups' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /patients/consultations/compliant-history/{consultation_id}:
+    post:
+      tags: [ConsultationsPatient]
+      summary: Submit compliant history (201 quirk)
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [past_medical_history]
+              properties:
+                past_medical_history: { type: string }
+                medication: { type: string }
+                allergy: { type: string }
+                family: { type: string }
+                travel: { type: string }
+                occupation: { type: string }
+                social: { type: string }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CompliantHistory' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    get:
+      tags: [ConsultationsPatient]
+      summary: List compliant histories (201 quirk)
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '201':
+          description: History array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/CompliantHistory' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /patients/consultations/compliant-history/{id}:
+    delete:
+      tags: [ConsultationsPatient]
+      summary: Delete compliant history (201 quirk)
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '201':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /patients/consultations/investigation-list/{id}/upload:
+    patch:
+      tags: [ConsultationsPatient]
+      summary: Upload result images (≤10 files, ≤10MB each)
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                files: { type: array, items: { type: string, format: binary } }
+                images: { type: array, items: { type: string, format: binary } }
+                result_images:
+                  { type: array, items: { type: string, format: binary } }
+      responses:
+        '200':
+          description: List with appended result_images URLs
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/InvestigationList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /patients/consultations/{consultation_id}/investigation-list:
+    get:
+      tags: [ConsultationsPatient]
+      summary: One consultation's lists with counts
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Lists with consultation
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        {
+                          $ref: '#/components/schemas/ConsultationInvestigations',
+                        }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /patients/consultations/{consultation_id}/referrals:
+    get:
+      tags: [ConsultationsPatient]
+      summary: One consultation's referrals
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Referral array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Referral' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /patients/consultations/{consultation_id}:
+    get:
+      tags: [ConsultationsPatient]
+      summary: Patient consultation detail (clinical children ids)
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Full detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ConsultationDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  # ---------------------------------------- Consultations (doctor) ----
+  /doctors/consultations/appointments/{appointment_id}/start:
+    post:
+      tags: [ConsultationsDoctor]
+      summary: Start (or resume) consultation for an appointment
+      security: [bearerAuth: []]
+      parameters:
+        - name: appointment_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type: { $ref: '#/components/schemas/ConsultationType' }
+                consoltation_for:
+                  { $ref: '#/components/schemas/ConsultationFor' }
+                title: { type: string }
+                details: { type: string }
+                treatment_plan: { type: string }
+      responses:
+        '201':
+          description: Consultation detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ConsultationDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /doctors/consultations/{consultation_id}/complete:
+    patch:
+      tags: [ConsultationsDoctor]
+      summary: Complete consultation
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Completed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations:
+    get:
+      tags: [ConsultationsDoctor]
+      summary: Doctor consultation list
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+      responses:
+        '200':
+          description: Consultation page
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ConsultationPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /doctors/consultations/all:
+    get:
+      tags: [ConsultationsDoctor]
+      summary: All doctor consultations (array)
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Consultation array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          { $ref: '#/components/schemas/ConsultationDoctor' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /doctors/consultations/consultation/weekly:
+    get:
+      tags: [ConsultationsDoctor]
+      summary: Trailing-7-day consultations
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Consultation array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          { $ref: '#/components/schemas/ConsultationDoctor' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /doctors/consultations/patients/{patient_id}/history:
+    get:
+      tags: [ConsultationsDoctor]
+      summary: Patient clinical history (full details)
+      security: [bearerAuth: []]
+      parameters:
+        - name: patient_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: History array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          { $ref: '#/components/schemas/ConsultationDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/patients/{patient_id}/history/consultations:
+    get:
+      tags: [ConsultationsDoctor]
+      summary: 5 latest consultations (slim)
+      security: [bearerAuth: []]
+      parameters:
+        - name: patient_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Slim history array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          { $ref: '#/components/schemas/HistoryConsultation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/patients/{patient_id}/history/medications:
+    get:
+      tags: [ConsultationsDoctor]
+      summary: 5 latest medications (enriched)
+      security: [bearerAuth: []]
+      parameters:
+        - name: patient_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Medication array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          { $ref: '#/components/schemas/EnrichedMedication' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/patients/{patient_id}/history/diagnoses:
+    get:
+      tags: [ConsultationsDoctor]
+      summary: 5 latest diagnosis forms (enriched)
+      security: [bearerAuth: []]
+      parameters:
+        - name: patient_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Diagnosis form array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          { $ref: '#/components/schemas/EnrichedDiagnosisForm' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/patients/{patient_id}/history/investigations:
+    get:
+      tags: [ConsultationsDoctor]
+      summary: Assigned investigations grouped (paginated)
+      security: [bearerAuth: []]
+      parameters:
+        - name: patient_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+      responses:
+        '200':
+          description: Grouped investigations
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/InvestigationGroups' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/{consultation_id}:
+    get:
+      tags: [ConsultationsDoctor]
+      summary: Doctor consultation detail
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Full detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ConsultationDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/{consultation_id}/medication:
+    post:
+      tags: [ConsultationsDoctor]
+      summary: Add medications (object or bare array)
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/MedicationCreate'
+                - type: array
+                  items: { $ref: '#/components/schemas/MedicationItem' }
+      responses:
+        '201':
+          description: Created medications
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Medication' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    get:
+      tags: [ConsultationsDoctor]
+      summary: One consultation's medications
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Medication array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Medication' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/{consultation_id}/medications/grouped:
+    get:
+      tags: [ConsultationsDoctor]
+      summary: One consultation's medications by formulary
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Formulary groups
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/FormularyGroups' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/medication/{medication_id}:
+    get:
+      tags: [ConsultationsDoctor]
+      summary: One medication
+      security: [bearerAuth: []]
+      parameters:
+        - name: medication_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Medication
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Medication' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [ConsultationsDoctor]
+      summary: Update medication (merged)
+      security: [bearerAuth: []]
+      parameters:
+        - name: medication_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MedicationItem' }
+      responses:
+        '200':
+          description: Medication
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Medication' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [ConsultationsDoctor]
+      summary: Delete medication
+      security: [bearerAuth: []]
+      parameters:
+        - name: medication_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/medications/grouped-by-consultation:
+    get:
+      tags: [ConsultationsDoctor]
+      summary: Own medications grouped by consultation
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+      responses:
+        '200':
+          description: Grouped medications
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MedicationGroups' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /doctors/consultations/{consultation_id}/physical-exam:
+    post:
+      tags: [ConsultationsDoctor]
+      summary: Create physical exam (singleton)
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PhysicalExamInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PhysicalExam' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [ConsultationsDoctor]
+      summary: Get physical exam
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Physical exam
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PhysicalExam' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/physical-exam/{id}:
+    patch:
+      tags: [ConsultationsDoctor]
+      summary: Update physical exam
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PhysicalExamInput' }
+      responses:
+        '200':
+          description: Physical exam
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PhysicalExam' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [ConsultationsDoctor]
+      summary: Delete physical exam
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/{consultation_id}/history-taking:
+    post:
+      tags: [ConsultationsDoctor]
+      summary: Create history-taking (singleton)
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HistoryTakingInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HistoryTaking' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [ConsultationsDoctor]
+      summary: Get history-taking
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: History-taking
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HistoryTaking' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/history-taking/{id}:
+    patch:
+      tags: [ConsultationsDoctor]
+      summary: Update history-taking
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HistoryTakingInput' }
+      responses:
+        '200':
+          description: History-taking
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HistoryTaking' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [ConsultationsDoctor]
+      summary: Delete history-taking
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/{consultation_id}/investigation-result:
+    post:
+      tags: [ConsultationsDoctor]
+      summary: Create investigation result (singleton)
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvestigationResultInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/InvestigationResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [ConsultationsDoctor]
+      summary: Get investigation result
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Investigation result
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/InvestigationResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/investigation-result/{id}:
+    patch:
+      tags: [ConsultationsDoctor]
+      summary: Update investigation result
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvestigationResultInput' }
+      responses:
+        '200':
+          description: Investigation result
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/InvestigationResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [ConsultationsDoctor]
+      summary: Delete investigation result
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/{consultation_id}/investigation-list:
+    post:
+      tags: [ConsultationsDoctor]
+      summary: Order investigation lists
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvestigationListCreate' }
+      responses:
+        '201':
+          description: Created lists
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          { $ref: '#/components/schemas/InvestigationList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [ConsultationsDoctor]
+      summary: One consultation's lists (array)
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: List array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          { $ref: '#/components/schemas/InvestigationList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/investigation-list/{id}:
+    patch:
+      tags: [ConsultationsDoctor]
+      summary: Update investigation list
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvestigationListItem' }
+      responses:
+        '200':
+          description: Investigation list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/InvestigationList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [ConsultationsDoctor]
+      summary: Delete investigation list
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/{consultation_id}/treatment-plan:
+    post:
+      tags: [ConsultationsDoctor]
+      summary: Create treatment plan (singleton)
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                treatment_plan_details: { type: string }
+                status: { $ref: '#/components/schemas/StageStatus' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/TreatmentPlan' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [ConsultationsDoctor]
+      summary: Get treatment plan
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Treatment plan
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/TreatmentPlan' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/treatment-plan/{id}:
+    patch:
+      tags: [ConsultationsDoctor]
+      summary: Update treatment plan
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                treatment_plan_details: { type: string }
+                status: { $ref: '#/components/schemas/StageStatus' }
+      responses:
+        '200':
+          description: Treatment plan
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/TreatmentPlan' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [ConsultationsDoctor]
+      summary: Delete treatment plan
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/{consultation_id}/diagnosis-form:
+    post:
+      tags: [ConsultationsDoctor]
+      summary: Create diagnosis form (singleton)
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DiagnosisFormInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DiagnosisForm' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [ConsultationsDoctor]
+      summary: Get diagnosis form
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Diagnosis form
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DiagnosisForm' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/diagnosis-form/{id}:
+    patch:
+      tags: [ConsultationsDoctor]
+      summary: Update diagnosis form
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DiagnosisFormInput' }
+      responses:
+        '200':
+          description: Diagnosis form
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DiagnosisForm' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [ConsultationsDoctor]
+      summary: Delete diagnosis form
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/{consultation_id}/referral:
+    post:
+      tags: [ConsultationsDoctor]
+      summary: Create referral
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReferralInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Referral' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    get:
+      tags: [ConsultationsDoctor]
+      summary: One consultation's referrals
+      security: [bearerAuth: []]
+      parameters:
+        - name: consultation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Referral array
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Referral' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/consultations/referrals/grouped:
+    get:
+      tags: [ConsultationsDoctor]
+      summary: Own referrals grouped by consultation
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+      responses:
+        '200':
+          description: Grouped referrals
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ReferralGroups' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /doctors/consultations/referral/{referral_id}:
+    get:
+      tags: [ConsultationsDoctor]
+      summary: One referral
+      security: [bearerAuth: []]
+      parameters:
+        - name: referral_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Referral
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Referral' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [ConsultationsDoctor]
+      summary: Update referral
+      security: [bearerAuth: []]
+      parameters:
+        - name: referral_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReferralInput' }
+      responses:
+        '200':
+          description: Referral
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Referral' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [ConsultationsDoctor]
+      summary: Delete referral
+      security: [bearerAuth: []]
+      parameters:
+        - name: referral_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  # ------------------------------------------------- Notifications ----
+  /patients/me/notifications:
+    get:
+      tags: [Notifications]
+      summary: Patient notification feed
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+      responses:
+        '200':
+          description: Feed page
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/NotificationPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /patients/me/notifications/unread-count:
+    get:
+      tags: [Notifications]
+      summary: Patient unread count
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Unread count
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [unread]
+                        properties:
+                          unread: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /patients/me/notifications/read-all:
+    patch:
+      tags: [Notifications]
+      summary: Mark all patient notifications read
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Marked
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /patients/me/notifications/{id}/read:
+    patch:
+      tags: [Notifications]
+      summary: Mark one notification read
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Marked
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /patients/me/notifications/{id}:
+    delete:
+      tags: [Notifications]
+      summary: Delete notification
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/me/notifications:
+    get:
+      tags: [Notifications]
+      summary: Doctor notification feed
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+      responses:
+        '200':
+          description: Feed page
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/NotificationPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /doctors/me/notifications/unread-count:
+    get:
+      tags: [Notifications]
+      summary: Doctor unread count
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Unread count
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [unread]
+                        properties:
+                          unread: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /doctors/me/notifications/read-all:
+    patch:
+      tags: [Notifications]
+      summary: Mark all doctor notifications read
+      security: [bearerAuth: []]
+      responses:
+        '200':
+          description: Marked
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /doctors/me/notifications/{id}/read:
+    patch:
+      tags: [Notifications]
+      summary: Mark one notification read
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Marked
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /doctors/me/notifications/{id}:
+    delete:
+      tags: [Notifications]
+      summary: Delete notification
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /internal/reminders/dispatch:
+    post:
+      tags: [Notifications]
+      summary: Run reminder sweep (key-gated, no JWT)
+      security: [reminderKey: []]
+      description: Claims due appointments atomically; safe under concurrency.
+      responses:
+        '200':
+          description: Sweep counts
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DispatchResult' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  # --------------------------------------------------------- Video ----
+  /doctors/me/appointments/{id}/video-token:
+    get:
+      tags: [Video]
+      summary: Doctor owner video token (creates room on first call)
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Room URL + owner token
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/VideoToken' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /doctors/me/appointments/{id}/video/start:
+    patch:
+      tags: [Video]
+      summary: Mark video session active
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Session active
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /doctors/me/appointments/{id}/video/end:
+    patch:
+      tags: [Video]
+      summary: Acknowledge session end
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: End acknowledged
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessageData' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /patients/me/appointments/{id}/video-token:
+    get:
+      tags: [Video]
+      summary: Patient guest video token (room must exist)
+      security: [bearerAuth: []]
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Room URL + guest token
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/VideoToken' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    reminderKey:
+      type: apiKey
+      in: header
+      name: x-reminder-key
+  parameters:
+    IdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    QueryQ:
+      name: q
+      in: query
+      schema: { type: string }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, default: 1 }
+    PerPage:
+      name: perPage
+      in: query
+      schema: { type: integer, default: 20, maximum: 100 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, default: 20 }
+    StatusQuery:
+      name: status
+      in: query
+      schema: { $ref: '#/components/schemas/AppointmentStatus' }
+    FromQuery:
+      name: from
+      in: query
+      schema: { type: string, format: date-time }
+    ToQuery:
+      name: to
+      in: query
+      schema: { type: string, format: date-time }
+    DateTimeLocal:
+      name: datetime_local
+      in: query
+      required: true
+      schema: { type: string, example: '2026-09-12T09:00' }
+    Timezone:
+      name: timezone
+      in: query
+      required: true
+      schema: { type: string, example: UTC }
+    Duration:
+      name: duration
+      in: query
+      required: true
+      schema: { type: integer, enum: [15, 30, 45, 60] }
+  responses:
+    BadRequest:
+      description: Validation failure (006)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Unauthorized:
+      description: Missing/invalid token (011)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Forbidden:
+      description: Wrong role or foreign record (009)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    NotFound:
+      description: Missing record (004)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Conflict:
+      description: State conflict (409)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    RateLimited:
+      description: Too many requests (429)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    PayloadTooLarge:
+      description: File exceeds size cap (413)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    UnsupportedMedia:
+      description: Non-image content type (415)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    ServerError:
+      description: Provider/upstream failure (016/500)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    ServiceUnavailable:
+      description: Unconfigured provider or database (503)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  schemas:
+    Envelope:
+      type: object
+      required:
+        [
+          success,
+          response_code,
+          response_description,
+          data,
+          request_id,
+          path,
+          timestamp,
+        ]
+      properties:
+        success: { type: boolean, example: true }
+        response_code: { type: string, example: '00' }
+        response_description: { type: string, example: Success }
+        data: { description: Endpoint payload (object, array, or null) }
+        message:
+          {
+            type: array,
+            items: { type: string },
+            description: Validation details (400 only),
+          }
+        request_id: { type: string, format: uuid }
+        path: { type: string }
+        timestamp: { type: string, format: date-time }
+    ErrorEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/Envelope'
+        - type: object
+          properties:
+            success: { type: boolean, example: false }
+            data: { nullable: true, example: null }
+    MessageData:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string }
+    Role:
+      type: string
+      enum: [admin, doctor, patient]
+    AppointmentStatus:
+      type: string
+      enum:
+        [
+          PENDING,
+          CONFIRMED,
+          ACTIVE,
+          COMPLETED,
+          CANCELED,
+          NO_SHOW,
+          FAILED,
+          FORFEITED,
+          RESCHEDULED,
+        ]
+    AppointmentFor:
+      type: string
+      enum: [SELF, OTHERS]
+    ConsultationType:
+      type: string
+      enum: [CHAT, AUDIO, VIDEO, MEETADOCTOR, HOMESERVICE]
+    ConsultationStatus:
+      type: string
+      enum:
+        [
+          PENDING,
+          ACTIVE,
+          COMPLETED,
+          CANCELED,
+          RESCHEDULED,
+          OPEN,
+          IN_PROGRESS,
+          ADDENDED,
+        ]
+    ConsultationFor:
+      type: string
+      description: 'Note the preserved misspelling: consoltation_for'
+      enum: [SELF, OTHERS]
+    StageStatus:
+      type: string
+      enum: [COMPLETED, INCOMPLETE]
+    Formulary:
+      type: string
+      enum: [TABLET, CAPSULE, SYRUP, INJECTION]
+    MedicationUnit:
+      type: string
+      enum: [MILLIGRAM, MICROGRAM, PUFFS, TAB, CAB, MLS, LITRE]
+    MedicationInterval:
+      type: string
+      enum: [DAILY, WEEKLY, MONTHLY, AS_NEEDED]
+    DurationUnit:
+      type: string
+      enum: [MINUTE, HOUR, DAY, MONTH]
+    MedicationStatus:
+      type: string
+      enum: [ACTIVE, INACTIVE, PENDING, STOPPED]
+    Pagination:
+      type: object
+      properties:
+        total: { type: integer }
+        page: { type: integer }
+        perPage: { type: integer }
+        total_pages: { type: integer }
+        totalPages: { type: integer }
+        limit: { type: integer }
+    VersionInfo:
+      type: object
+      properties:
+        service: { type: string, example: telemex-api }
+        version: { type: string }
+        commit: { type: string }
+        built_at: { type: string }
+    Readiness:
+      type: object
+      properties:
+        status: { type: string, example: ready }
+        database: { type: string, example: ok }
+        pool:
+          type: object
+          properties:
+            total: { type: integer }
+            idle: { type: integer }
+            acquired: { type: integer }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+    OtpInitiated:
+      type: object
+      properties:
+        message: { type: string }
+        email: { type: string }
+        expires_in_minutes: { type: integer, example: 10 }
+        cooldown_seconds: { type: integer, example: 60 }
+        otp:
+          {
+            type: string,
+            description: Present only when OTP echo is enabled (dev/test),
+          }
+    RegistrationToken:
+      type: object
+      properties:
+        message: { type: string }
+        registration_token: { type: string }
+        expires_in: { type: string, example: 15m }
+    PatientSummary:
+      type: object
+      properties:
+        _id: { type: string, format: uuid }
+        registration_no: { type: string }
+        mrn: { type: string }
+        first_name: { type: string }
+        last_name: { type: string }
+        full_name: { type: string }
+        email: { type: string }
+        phone_number: { type: string }
+        verified: { type: boolean }
+        profile_picture_url: { type: string }
+        date_of_birth: { type: string, nullable: true, example: '1990-04-01' }
+        gender: { type: string, nullable: true }
+        occupation: { type: string, nullable: true }
+        marital_status: { type: string, nullable: true }
+        timezone: { type: string, nullable: true }
+        allergies: { type: array, items: { type: string } }
+        previous_medical_conditions: { type: array, items: { type: string } }
+    PatientProfile:
+      allOf:
+        - $ref: '#/components/schemas/PatientSummary'
+        - type: object
+          properties:
+            middle_name: { type: string, nullable: true }
+            address: { type: string, nullable: true }
+            medical_flags: { type: array, items: { type: string } }
+    PatientPatch:
+      type: object
+      properties:
+        first_name: { type: string }
+        last_name: { type: string }
+        middle_name: { type: string }
+        phone_number: { type: string }
+        gender: { type: string }
+        marital_status: { type: string }
+        occupation: { type: string }
+        address: { type: string }
+        profile_picture_url: { type: string }
+        date_of_birth: { type: string, example: '1990-04-01' }
+        allergies: { type: array, items: { type: string } }
+        previous_medical_conditions: { type: array, items: { type: string } }
+        medical_flags: { type: array, items: { type: string } }
+    PatientMetrics:
+      type: object
+      properties:
+        consultations: { type: integer }
+        medications: { type: integer }
+        investigations: { type: integer }
+        appointments: { type: integer }
+    PatientSession:
+      type: object
+      properties:
+        user: { $ref: '#/components/schemas/PatientSummary' }
+        token: { type: string }
+        refresh_token: { type: string }
+        role: { type: string, example: patient }
+    DoctorSummary:
+      type: object
+      properties:
+        _id: { type: string, format: uuid }
+        doctor_no: { type: string }
+        first_name: { type: string }
+        last_name: { type: string }
+        full_name: { type: string }
+        email: { type: string }
+        phone_number: { type: string }
+        active: { type: boolean }
+        specializations: { type: array, items: { type: string } }
+        profile_picture_url: { type: string }
+        timezone: { type: string, nullable: true }
+    DoctorProfile:
+      allOf:
+        - $ref: '#/components/schemas/DoctorSummary'
+        - type: object
+          properties:
+            license_no: { type: string, nullable: true }
+    DoctorPatch:
+      type: object
+      properties:
+        first_name: { type: string }
+        last_name: { type: string }
+        phone_number: { type: string }
+        profile_picture_url: { type: string }
+        license_no: { type: string }
+        specializations: { type: array, items: { type: string } }
+    DoctorMetrics:
+      type: object
+      properties:
+        consultations: { type: integer }
+        medications: { type: integer }
+        investigations: { type: integer }
+        appointments: { type: integer }
+    DoctorSession:
+      type: object
+      properties:
+        doctor: { $ref: '#/components/schemas/DoctorSummary' }
+        token: { type: string }
+        refresh_token: { type: string }
+        role: { type: string, example: doctor }
+    DoctorSearchRow:
+      type: object
+      properties:
+        _id: { type: string, format: uuid }
+        first_name: { type: string }
+        last_name: { type: string }
+        full_name: { type: string }
+        email: { type: string }
+        profile_picture_url: { type: string }
+        specializations: { type: array, items: { type: string } }
+        active: { type: boolean }
+        availability: { $ref: '#/components/schemas/Availability' }
+    DoctorPatientRow:
+      type: object
+      properties:
+        _id: { type: string, format: uuid }
+        first_name: { type: string }
+        middle_name: { type: string, nullable: true }
+        last_name: { type: string }
+        full_name: { type: string }
+        email: { type: string }
+        phone_number: { type: string, nullable: true }
+        registration_no: { type: string }
+        mrn: { type: string }
+        gender: { type: string, nullable: true }
+        date_of_birth: { type: string, nullable: true }
+        marital_status: { type: string, nullable: true }
+        occupation: { type: string, nullable: true }
+        address: { type: string, nullable: true }
+        profile_picture_url: { type: string }
+        verified: { type: boolean }
+        consultation_id: { type: string, nullable: true }
+        has_consultation_with_doctor: { type: boolean }
+    AdminJSON:
+      type: object
+      properties:
+        _id: { type: string, format: uuid }
+        first_name: { type: string }
+        last_name: { type: string }
+        email: { type: string }
+        phone_number: { type: string, nullable: true }
+        role: { type: string }
+    AdminSession:
+      type: object
+      properties:
+        admin: { $ref: '#/components/schemas/AdminJSON' }
+        token: { type: string }
+        refresh_token: { type: string }
+        role: { type: string, example: admin }
+    Metric:
+      type: object
+      properties:
+        total: { type: integer }
+        current: { type: integer }
+        previous: { type: integer }
+        change_percent: { type: number }
+        trend: { type: string, enum: [up, down, stable] }
+    BookRequest:
+      type: object
+      required:
+        [
+          first_name,
+          last_name,
+          present_complaint,
+          scheduled_start_local,
+          timezone,
+          requested_duration_minutes,
+        ]
+      properties:
+        first_name: { type: string }
+        last_name: { type: string }
+        date_of_birth: { type: string, example: '1990-04-01' }
+        gender: { type: string }
+        marital_status: { type: string }
+        occupation: { type: string }
+        present_complaint: { type: string }
+        reason_for_visit: { type: string }
+        complaint_brief: { type: string }
+        doctor_id: { type: string, format: uuid }
+        specialization: { type: string }
+        consultation_type: { type: string }
+        appointment_for:
+          { $ref: '#/components/schemas/AppointmentFor', default: SELF }
+        scheduled_start_local: { type: string, example: '2026-09-12T09:00' }
+        timezone: { type: string, example: UTC }
+        requested_duration_minutes: { type: integer, enum: [15, 30, 45, 60] }
+        confirm_appointment:
+          { type: boolean, description: Must be true to book }
+        allergies: { type: array, items: { type: string } }
+        Medical_conditions:
+          type: array
+          items: { type: string }
+          description: 'Preserved capital-M spelling from the Nest contract'
+    Appointment:
+      type: object
+      properties:
+        _id: { type: string, format: uuid }
+        appointment_number: { type: string, example: APT-20260912-4819 }
+        patient_id: { type: string, format: uuid }
+        doctor_id: { type: string, format: uuid }
+        scheduled_start_at_utc: { type: string, format: date-time }
+        scheduled_end_at_utc: { type: string, format: date-time }
+        timezone_snapshot: { type: string }
+        status: { $ref: '#/components/schemas/AppointmentStatus' }
+        appointment_for: { $ref: '#/components/schemas/AppointmentFor' }
+        reason_for_visit: { type: string, nullable: true }
+        complaint_brief: { type: string, nullable: true }
+        Medical_conditions: { type: array, items: { type: string } }
+        allergies: { type: array, items: { type: string } }
+        booking_profile_snapshot: { type: object }
+        doctor_snapshot: { type: object }
+        cancelled_by: { type: string, nullable: true, enum: [PATIENT, DOCTOR] }
+        cancelled_reason: { type: string, nullable: true }
+        rescheduled_from_appointment_id: { type: string, nullable: true }
+        daily_room_name: { type: string, nullable: true }
+        daily_room_url: { type: string, nullable: true }
+        daily_room_expires_at: { type: string, nullable: true }
+        daily_recording_id: { type: string, nullable: true }
+        video_started_at: { type: string, nullable: true }
+        video_ended_at: { type: string, nullable: true }
+        doctor:
+          type: object
+          nullable: true
+          description: Present on patient list/detail views
+          properties:
+            _id: { type: string }
+            first_name: { type: string }
+            last_name: { type: string }
+            full_name: { type: string }
+            email: { type: string }
+            specializations: { type: array, items: { type: string } }
+            profile_picture_url: { type: string }
+        patient:
+          type: object
+          nullable: true
+          description: Present on doctor detail/schedule views
+          properties:
+            _id: { type: string }
+            first_name: { type: string }
+            last_name: { type: string }
+            full_name: { type: string }
+            email: { type: string }
+            profile_picture_url: { type: string }
+        consultation:
+          type: object
+          nullable: true
+          properties:
+            _id: { type: string }
+            reference: { type: string }
+            type: { $ref: '#/components/schemas/ConsultationType' }
+            title: { type: string }
+            status: { $ref: '#/components/schemas/ConsultationStatus' }
+        consultation_id:
+          {
+            type: string,
+            nullable: true,
+            description: Linked consultation reference,
+          }
+        rescheduled_history:
+          type: array
+          items: { $ref: '#/components/schemas/Appointment' }
+    AppointmentDetail:
+      allOf: [{ $ref: '#/components/schemas/Appointment' }]
+    AppointmentPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Appointment' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+    AutoBookResult:
+      type: object
+      properties:
+        booked: { type: boolean }
+        fallback_used: { type: boolean }
+        fallback_reason: { type: string }
+        selected_doctor: { $ref: '#/components/schemas/DoctorSearchRow' }
+        appointment: { $ref: '#/components/schemas/Appointment' }
+    RescheduleRequest:
+      type: object
+      required: [scheduled_start_local, timezone]
+      properties:
+        scheduled_start_local: { type: string, example: '2026-09-12T09:00' }
+        timezone: { type: string, example: UTC }
+        requested_duration_minutes:
+          { type: integer, enum: [15, 30, 45, 60], default: 30 }
+        reason: { type: string }
+        requested_specialization: { type: string }
+    RescheduleResult:
+      type: object
+      properties:
+        old_appointment_id: { type: string }
+        fallback_used: { type: boolean }
+        fallback_reason: { type: string }
+        awaiting_doctor_assignment: { type: boolean }
+        new_appointment: { $ref: '#/components/schemas/Appointment' }
+    WeekGroups:
+      type: object
+      properties:
+        filter:
+          type: object
+          properties:
+            status: { type: string }
+            weekly: { type: string }
+            year: { type: string }
+        total: { type: integer }
+        groups:
+          type: array
+          items:
+            type: object
+            properties:
+              week: { type: integer }
+              year: { type: integer }
+              start_at_utc: { type: string }
+              end_at_utc: { type: string }
+              items:
+                type: array
+                items: { $ref: '#/components/schemas/Appointment' }
+    PatientSchedule:
+      type: object
+      properties:
+        appointments:
+          type: array
+          items: { $ref: '#/components/schemas/Appointment' }
+        week: { type: integer }
+        year: { type: integer }
+        start_at_utc: { type: string }
+        end_at_utc: { type: string }
+    DoctorSchedule:
+      type: object
+      properties:
+        appointments:
+          type: array
+          items: { $ref: '#/components/schemas/Appointment' }
+        blackouts:
+          type: array
+          items: { $ref: '#/components/schemas/Blackout' }
+        week: { type: integer }
+        year: { type: integer }
+        start_at_utc: { type: string }
+        end_at_utc: { type: string }
+        timezone: { type: string }
+    SlotCheck:
+      type: object
+      properties:
+        available: { type: boolean }
+        reason: { type: string }
+        doctor:
+          type: object
+          properties:
+            _id: { type: string }
+            first_name: { type: string }
+            last_name: { type: string }
+            full_name: { type: string }
+            specializations: { type: array, items: { type: string } }
+        slot:
+          type: object
+          properties:
+            start_at_utc: { type: string }
+            end_at_utc: { type: string }
+            duration_minutes: { type: integer }
+            timezone: { type: string }
+    DaySlots:
+      type: object
+      properties:
+        doctor_id: { type: string }
+        date: { type: string }
+        timezone: { type: string }
+        slots:
+          type: array
+          items:
+            type: object
+            properties:
+              start_at_utc: { type: string }
+              end_at_utc: { type: string }
+    OptimalMatch:
+      type: object
+      properties:
+        found: { type: boolean }
+        reason: { type: string }
+        doctor: { $ref: '#/components/schemas/DoctorSearchRow' }
+        slot:
+          type: object
+          properties:
+            start_at_utc: { type: string }
+            end_at_utc: { type: string }
+            duration_minutes: { type: integer }
+            timezone: { type: string }
+    AvailabilityMatrix:
+      type: object
+      description: Date-keyed 15-minute grid of slot availability
+      additionalProperties:
+        type: object
+        properties:
+          slots:
+            type: array
+            items:
+              type: object
+              properties:
+                time: { type: string, example: '03:04 PM' }
+                available_doctors: { type: integer }
+                max_consecutive_slots: { type: integer, minimum: 0, maximum: 4 }
+    WeeklySlot:
+      type: object
+      properties:
+        day_of_week: { type: integer, minimum: 0, maximum: 6 }
+        start_time: { type: string, example: '09:00' }
+        end_time: { type: string, example: '17:00' }
+        slot_duration_minutes: { type: integer }
+        is_active: { type: boolean, default: true }
+    Availability:
+      type: object
+      properties:
+        _id: { type: string }
+        doctor_id: { type: string }
+        timezone: { type: string }
+        weekly_slots:
+          type: array
+          items: { $ref: '#/components/schemas/WeeklySlot' }
+        effective_from: { type: string, nullable: true }
+        effective_to: { type: string, nullable: true }
+    AvailabilityUpsert:
+      type: object
+      required: [timezone, weekly_slots]
+      properties:
+        timezone: { type: string, example: UTC }
+        weekly_slots:
+          type: array
+          items: { $ref: '#/components/schemas/WeeklySlot' }
+        effective_from: { type: string, example: '2026-01-01' }
+        effective_to: { type: string }
+    BlackoutInput:
+      type: object
+      required: [start_local, end_local, timezone]
+      properties:
+        start_local: { type: string, example: '2026-09-12T09:00' }
+        end_local: { type: string, example: '2026-09-12T12:00' }
+        timezone: { type: string, example: UTC }
+        reason: { type: string }
+        reccuring:
+          {
+            type: boolean,
+            description: 'Preserved spelling from the Nest contract',
+          }
+    Blackout:
+      allOf:
+        - $ref: '#/components/schemas/BlackoutInput'
+        - type: object
+          properties:
+            _id: { type: string }
+            doctor_id: { type: string }
+            start_at_utc: { type: string }
+            end_at_utc: { type: string }
+            reason: { type: string, nullable: true }
+            day_of_week:
+              { type: integer, description: Present for recurring blackouts }
+            start_time_minutes: { type: integer }
+            end_time_minutes: { type: integer }
+    ConsultationBase:
+      type: object
+      properties:
+        _id: { type: string, format: uuid }
+        appointment_id: { type: string, nullable: true }
+        user_id: { type: string, nullable: true }
+        doctor_id: { type: string, nullable: true }
+        consultation_id:
+          { type: string, description: Human reference (e.g. CONS-…) }
+        type: { $ref: '#/components/schemas/ConsultationType' }
+        consoltation_for: { $ref: '#/components/schemas/ConsultationFor' }
+        title: { type: string }
+        details: { type: string, nullable: true }
+        session_number: { type: string, nullable: true }
+        parent_consultation_id: { type: string, nullable: true }
+        treatment_plan: { type: string, nullable: true }
+        status: { $ref: '#/components/schemas/ConsultationStatus' }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    ConsultationPatient:
+      allOf:
+        - $ref: '#/components/schemas/ConsultationBase'
+        - type: object
+          properties:
+            doctor_id: { $ref: '#/components/schemas/DoctorBrief' }
+            appointment_id: { $ref: '#/components/schemas/AppointmentCard' }
+    ConsultationDoctor:
+      allOf:
+        - $ref: '#/components/schemas/ConsultationBase'
+        - type: object
+          properties:
+            user_id: { $ref: '#/components/schemas/PatientCard' }
+            appointment_id: { $ref: '#/components/schemas/AppointmentCard' }
+            doctor_id: { $ref: '#/components/schemas/DoctorCard' }
+    ConsultationPage:
+      type: object
+      properties:
+        consultation:
+          type: array
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/ConsultationPatient'
+              - $ref: '#/components/schemas/ConsultationDoctor'
+        meta:
+          type: object
+          properties:
+            total: { type: integer }
+            page: { type: integer }
+            lastPage: { type: integer }
+    ConsultationDetail:
+      allOf:
+        - $ref: '#/components/schemas/ConsultationBase'
+        - type: object
+          properties:
+            doctor_id: { $ref: '#/components/schemas/DoctorBrief' }
+            user_id: { $ref: '#/components/schemas/PatientCard' }
+            appointment_id: { $ref: '#/components/schemas/AppointmentCard' }
+            medication_id: { type: array, items: { type: string } }
+            investigation_id: { type: array, items: { type: string } }
+            diagnosis_id: { type: array, items: { type: string } }
+            history_taking_id: { type: string, nullable: true }
+            physical_exam_id: { type: string, nullable: true }
+            investigation_result_id: { type: string, nullable: true }
+            treatment_plan_id: { type: string, nullable: true }
+            diagnosis_form_id: { type: string, nullable: true }
+    DoctorBrief:
+      type: object
+      properties:
+        _id: { type: string }
+        first_name: { type: string }
+        last_name: { type: string }
+        full_name: { type: string }
+        email: { type: string }
+        specializations: { type: array, items: { type: string } }
+        profile_picture_url: { type: string }
+    DoctorCard:
+      allOf:
+        - $ref: '#/components/schemas/DoctorBrief'
+        - type: object
+          properties:
+            phone_number: { type: string, nullable: true }
+    PatientCard:
+      type: object
+      properties:
+        _id: { type: string }
+        first_name: { type: string }
+        last_name: { type: string }
+        full_name: { type: string }
+        email: { type: string }
+        phone_number: { type: string, nullable: true }
+        gender: { type: string, nullable: true }
+        date_of_birth: { type: string, nullable: true }
+        profile_picture_url: { type: string }
+    AppointmentCard:
+      type: object
+      properties:
+        _id: { type: string }
+        appointment_number: { type: string }
+        scheduled_start_at_utc: { type: string }
+        scheduled_end_at_utc: { type: string }
+        status: { $ref: '#/components/schemas/AppointmentStatus' }
+        reason_for_visit: { type: string, nullable: true }
+        timezone_snapshot: { type: string }
+    ConsultMini:
+      type: object
+      properties:
+        _id: { type: string }
+        title: { type: string }
+        type: { $ref: '#/components/schemas/ConsultationType' }
+        status: { $ref: '#/components/schemas/ConsultationStatus' }
+        createdAt: { type: string }
+    HistoryConsultation:
+      type: object
+      properties:
+        _id: { type: string }
+        title: { type: string }
+        type: { $ref: '#/components/schemas/ConsultationType' }
+        consoltation_for: { $ref: '#/components/schemas/ConsultationFor' }
+        status: { $ref: '#/components/schemas/ConsultationStatus' }
+        session_number: { type: string, nullable: true }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+        doctor_id: { $ref: '#/components/schemas/DoctorBrief' }
+        appointment_id: { $ref: '#/components/schemas/AppointmentCard' }
+    Medication:
+      type: object
+      properties:
+        _id: { type: string, format: uuid }
+        consultation_id: { type: string }
+        user_id: { type: string }
+        doctor_id: { type: string }
+        formulary: { $ref: '#/components/schemas/Formulary' }
+        medication: { type: string }
+        dose: { type: number }
+        unit: { $ref: '#/components/schemas/MedicationUnit' }
+        interval: { $ref: '#/components/schemas/MedicationInterval' }
+        duration: { type: number }
+        duration_unit: { $ref: '#/components/schemas/DurationUnit' }
+        order_instruction: { type: string, nullable: true }
+        start_date: { type: string, nullable: true }
+        assign_to_patient: { type: boolean }
+        status: { $ref: '#/components/schemas/MedicationStatus' }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    MedicationItem:
+      type: object
+      required: [formulary, medication, unit, interval, duration_unit]
+      properties:
+        formulary: { $ref: '#/components/schemas/Formulary' }
+        medication: { type: string }
+        dose: { type: number, minimum: 0 }
+        unit: { $ref: '#/components/schemas/MedicationUnit' }
+        interval: { $ref: '#/components/schemas/MedicationInterval' }
+        duration: { type: number, minimum: 0 }
+        duration_unit: { $ref: '#/components/schemas/DurationUnit' }
+        order_instruction: { type: string }
+        start_date: { type: string }
+        assign_to_patient: { type: boolean }
+        status: { $ref: '#/components/schemas/MedicationStatus' }
+    MedicationCreate:
+      type: object
+      required: [medications]
+      properties:
+        medications:
+          type: array
+          items: { $ref: '#/components/schemas/MedicationItem' }
+    EnrichedMedication:
+      allOf:
+        - $ref: '#/components/schemas/Medication'
+        - type: object
+          properties:
+            consultation_id: { $ref: '#/components/schemas/ConsultMini' }
+            doctor_id: { $ref: '#/components/schemas/DoctorBrief' }
+    MedicationGroups:
+      type: object
+      properties:
+        groups:
+          type: array
+          items:
+            type: object
+            properties:
+              medication_count: { type: integer }
+              medications:
+                type: array
+                items: { $ref: '#/components/schemas/Medication' }
+              consultation: { $ref: '#/components/schemas/ConsultationBase' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+    FormularyGroups:
+      type: object
+      properties:
+        consultation_id: { type: string }
+        total: { type: integer }
+        groups:
+          type: array
+          items:
+            type: object
+            properties:
+              formulary: { $ref: '#/components/schemas/Formulary' }
+              count: { type: integer }
+              medications:
+                type: array
+                items: { $ref: '#/components/schemas/Medication' }
+    InvestigationList:
+      type: object
+      properties:
+        _id: { type: string, format: uuid }
+        consultation_id: { type: string }
+        user_id: { type: string }
+        doctor_id: { type: string }
+        name: { type: string }
+        category: { type: string, nullable: true }
+        test_requested: { type: string, nullable: true }
+        priority: { type: string, example: Routine }
+        specimen: { type: string, example: '-' }
+        assign_to_patient: { type: boolean }
+        result_images: { type: array, items: { type: string } }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    InvestigationListItem:
+      type: object
+      required: [category, test_requested]
+      properties:
+        category: { type: string }
+        test_requested: { type: string }
+        priority: { type: string, default: Routine }
+        specimen: { type: string, default: '-' }
+    InvestigationListCreate:
+      type: object
+      required: [investigations]
+      properties:
+        investigations:
+          type: array
+          items: { $ref: '#/components/schemas/InvestigationListItem' }
+        assign_to_patient: { type: boolean }
+    InvestigationGroups:
+      type: object
+      properties:
+        groups:
+          type: array
+          items:
+            type: object
+            properties:
+              investigation_count: { type: integer }
+              investigations:
+                type: array
+                items: { $ref: '#/components/schemas/InvestigationList' }
+              consultation:
+                type: object
+                properties:
+                  _id: { type: string }
+                  title: { type: string }
+                  type: { $ref: '#/components/schemas/ConsultationType' }
+                  consoltation_for:
+                    { $ref: '#/components/schemas/ConsultationFor' }
+                  status: { $ref: '#/components/schemas/ConsultationStatus' }
+                  session_number: { type: string, nullable: true }
+                  consultation_id: { type: string }
+                  doctor: { $ref: '#/components/schemas/DoctorBrief' }
+                  appointment: { $ref: '#/components/schemas/AppointmentCard' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+    ConsultationInvestigations:
+      type: object
+      properties:
+        consultation: { $ref: '#/components/schemas/ConsultationBase' }
+        investigation_count: { type: integer }
+        investigations:
+          type: array
+          items: { $ref: '#/components/schemas/InvestigationList' }
+    InvestigationResult:
+      type: object
+      properties:
+        _id: { type: string, format: uuid }
+        consultation_id: { type: string }
+        user_id: { type: string }
+        doctor_id: { type: string }
+        blood_test: { type: string, nullable: true }
+        microbiology: { type: string, nullable: true }
+        radiology: { type: string, nullable: true }
+        cardiovascular: { type: string, nullable: true }
+        procedures: { type: string, nullable: true }
+        others: { type: string, nullable: true }
+        status: { $ref: '#/components/schemas/StageStatus' }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    InvestigationResultInput:
+      type: object
+      properties:
+        blood_test: { type: string }
+        microbiology: { type: string }
+        radiology: { type: string }
+        cardiovascular: { type: string }
+        procedures: { type: string }
+        others: { type: string }
+        status: { $ref: '#/components/schemas/StageStatus' }
+    Referral:
+      type: object
+      properties:
+        _id: { type: string, format: uuid }
+        consultation_id: { type: string }
+        user_id: { type: string }
+        doctor_id: { type: string }
+        referred_doctor_name: { type: string, nullable: true }
+        specialist_name: { type: string }
+        specialty: { type: string, nullable: true }
+        hospital: { type: string }
+        hospital_address: { type: array, items: { type: string } }
+        attachment_investigation_ids: { type: array, items: { type: string } }
+        referral_details: { type: string }
+        assign_to_patient: { type: boolean }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    ReferralInput:
+      type: object
+      required: [specialist_name, hospital, referral_details]
+      properties:
+        specialist_name: { type: string }
+        hospital: { type: string }
+        referral_details: { type: string }
+        specialty: { type: string }
+        hospital_address: { type: array, items: { type: string } }
+        attachment_investigation_ids: { type: array, items: { type: string } }
+        referred_doctor_name: { type: string }
+        assign_to_patient: { type: boolean }
+    ReferralGroup:
+      type: object
+      properties:
+        referral_count: { type: integer }
+        referrals:
+          type: array
+          items: { $ref: '#/components/schemas/Referral' }
+        consultation: { $ref: '#/components/schemas/ConsultationBase' }
+    ReferralGroups:
+      type: object
+      properties:
+        groups:
+          type: array
+          items: { $ref: '#/components/schemas/ReferralGroup' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+    CompliantHistory:
+      type: object
+      properties:
+        _id: { type: string, format: uuid }
+        consultation_id: { type: string }
+        past_medical_history: { type: string }
+        medication: { type: string, nullable: true }
+        allergy: { type: string, nullable: true }
+        family: { type: string, nullable: true }
+        travel: { type: string, nullable: true }
+        occupation: { type: string, nullable: true }
+        social: { type: string, nullable: true }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    HistoryTaking:
+      type: object
+      properties:
+        _id: { type: string, format: uuid }
+        consultation_id: { type: string }
+        present_complaint: { type: string }
+        history_of_presenting_complaint: { type: string, nullable: true }
+        past_medical_surgical_history: { type: string, nullable: true }
+        medication_history: { type: string, nullable: true }
+        allergy_history: { type: array, items: { type: string } }
+        family_history: { type: string, nullable: true }
+        travel_history: { type: string, nullable: true }
+        occupation: { type: string, nullable: true }
+        social_history: { type: string, nullable: true }
+        obstetric_gynaecological_history: { type: string, nullable: true }
+        others: { type: string, nullable: true }
+        status: { $ref: '#/components/schemas/StageStatus' }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    HistoryTakingInput:
+      type: object
+      properties:
+        present_complaint: { type: string }
+        history_of_presenting_complaint: { type: string }
+        past_medical_surgical_history: { type: string }
+        medication_history: { type: string }
+        allergy_history: { type: array, items: { type: string } }
+        family_history: { type: string }
+        travel_history: { type: string }
+        occupation: { type: string }
+        social_history: { type: string }
+        obstetric_gynaecological_history: { type: string }
+        others: { type: string }
+        status: { $ref: '#/components/schemas/StageStatus' }
+    PhysicalExam:
+      type: object
+      properties:
+        _id: { type: string, format: uuid }
+        consultation_id: { type: string }
+        general_physical: { type: string, nullable: true }
+        nervous_system: { type: string, nullable: true }
+        respiratory_system: { type: string, nullable: true }
+        cardiovascular_system: { type: string, nullable: true }
+        gastrointestinal_system: { type: string, nullable: true }
+        genitourinary_system: { type: string, nullable: true }
+        musculoskeletal_system: { type: string, nullable: true }
+        ent: { type: string, nullable: true }
+        obstetric_gynaecological: { type: string, nullable: true }
+        others: { type: string, nullable: true }
+        status: { $ref: '#/components/schemas/StageStatus' }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    PhysicalExamInput:
+      type: object
+      properties:
+        general_physical: { type: string }
+        nervous_system: { type: string }
+        respiratory_system: { type: string }
+        cardiovascular_system: { type: string }
+        gastrointestinal_system: { type: string }
+        genitourinary_system: { type: string }
+        musculoskeletal_system: { type: string }
+        ent: { type: string }
+        obstetric_gynaecological: { type: string }
+        others: { type: string }
+        status: { $ref: '#/components/schemas/StageStatus' }
+    TreatmentPlan:
+      type: object
+      properties:
+        _id: { type: string, format: uuid }
+        consultation_id: { type: string }
+        treatment_plan_details: { type: string, nullable: true }
+        status: { $ref: '#/components/schemas/StageStatus' }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    DiagnosisForm:
+      type: object
+      properties:
+        _id: { type: string, format: uuid }
+        consultation_id: { type: string }
+        user_id: { type: string }
+        doctor_id: { type: string }
+        provisional_diagnosis: { type: array, items: { type: string } }
+        final_diagnosis: { type: array, items: { type: string } }
+        status: { $ref: '#/components/schemas/StageStatus' }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    DiagnosisFormInput:
+      type: object
+      properties:
+        provisional_diagnosis: { type: array, items: { type: string } }
+        final_diagnosis: { type: array, items: { type: string } }
+        status: { $ref: '#/components/schemas/StageStatus' }
+    EnrichedDiagnosisForm:
+      allOf:
+        - $ref: '#/components/schemas/DiagnosisForm'
+        - type: object
+          properties:
+            consultation_id: { $ref: '#/components/schemas/ConsultMini' }
+            doctor_id: { $ref: '#/components/schemas/DoctorBrief' }
+    NotificationItem:
+      type: object
+      properties:
+        _id: { type: string, format: uuid }
+        recipient_id: { type: string }
+        recipient_type: { type: string, enum: [patient, doctor] }
+        type: { type: string }
+        category: { type: string }
+        title: { type: string }
+        body: { type: string }
+        data: { type: object }
+        appointment_id: { type: string, nullable: true }
+        consultation_id: { type: string, nullable: true }
+        read_at: { type: string, nullable: true }
+        createdAt: { type: string }
+    NotificationPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/NotificationItem' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+    DispatchResult:
+      type: object
+      properties:
+        sent_24h: { type: integer }
+        sent_1h: { type: integer }
+        skipped: { type: integer }
+    VideoToken:
+      type: object
+      properties:
+        appointmentId: { type: string, format: uuid }
+        consultationId: { type: string, nullable: true }
+        role: { type: string, enum: [doctor, patient] }
+        roomUrl: { type: string }
+        token: { type: string }
+        expiresAt: { type: string, format: date-time }
