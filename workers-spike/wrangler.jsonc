@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "health-app-mongo-spike",
+  "main": "src/mongo-smoke-test.ts",
+  "compatibility_date": "2026-09-12",
+
+  // As of compatibility_date 2026-08-04+, nodejs_compat and nodejs_compat_v2 are
+  // implied by the date itself — Cloudflare's own docs say new configs should omit
+  // the flags rather than set them. Left as a comment, not a flag, deliberately:
+  // https://developers.cloudflare.com/workers/runtime-apis/nodejs/
+
+  "observability": {
+    "enabled": true
+  }
+}
